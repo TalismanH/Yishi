@@ -1,0 +1,13 @@
+{
+  "name": "quiet-todo-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "本地优先的三级事项桌面工作台",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "node --check server.mjs && node --check public/model.mjs && node --check public/app.mjs"
+  }
+}
