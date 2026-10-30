@@ -19,7 +19,7 @@ const statuses = {todo:'待办项',doing:'进行中',done:'已完成'};
 const app = document.querySelector('#app');
 const dialog = document.querySelector('#editor');
 let state, revision, activeId, view = 'active', saving = false, dirty = false, saveError = '', conflict = false, dragged = null;
-let toastTimer, ignoreDragClick = false;
+let toastTimer, pendingTimer, ignoreDragClick = false;
 
 // Build Markdown through a strict element/attribute allowlist before inserting it.
 function markdown(source) {
@@ -134,21 +134,27 @@ function projectHTML(project) {
   return `<section class="project expanded" id="project-${id}">
     <header class="project-header">${actionButton('toggle','收起项目','down',`data-project="${id}" aria-expanded="true"`)}${editable('name',project,project.name)}<div class="project-tools">${project.archivedAt ? `<button class="plain-button" data-action="restore" data-project="${id}">${icon('undo')} 恢复项目</button>` : actionButton('archive','归档','archive',`data-project="${id}"`)}${actionButton('delete-project','删除项目','trash',`data-project="${id}"`)}</div></header>
     <div class="project-body"><section class="overview"><div class="overview-header"><h2>总体情况</h2><span class="progress-value" aria-label="完成度">${stats.percent}%</span></div>${editable('summary',project,project.summary)}</section>
-    <div class="board" data-board="${id}">${Object.entries(statuses).map(([status,label]) => `<section class="column ${status}" data-column="${status}" data-project="${id}" aria-label="${label}"><h2 class="column-heading"><span class="status-dot"></span>${label}</h2><div class="column-items">${projectColumn(display,status).map(node => taskHTML(node,display,status)).join('')}</div>${!project.archivedAt && status === 'todo' ? `<button class="add-task" data-action="add-task" data-project="${id}" aria-label="新增待办" title="新增待办">${icon('plus')}</button>` : ''}</section>`).join('')}</div></div>
+    <div class="board" data-board="${id}">${Object.entries(statuses).map(([status,label]) => `<section class="column ${status}" data-column="${status}" data-project="${id}" aria-label="${label}"><h2 class="column-heading"><span class="status-dot"></span>${label}</h2><div class="column-items" tabindex="0" role="region" aria-label="${label}列表">${projectColumn(display,status).map(node => taskHTML(node,display,status)).join('')}${!project.archivedAt && status === 'todo' ? `<button class="add-task" data-action="add-task" data-project="${id}" aria-label="新增待办" title="新增待办">${icon('plus')}</button>` : ''}</div></section>`).join('')}</div></div>
   </section>`;
 }
 
 function render() {
   const previous = app.querySelector('.project.expanded');
   const body = previous?.querySelector('.project-body');
-  const scroll = {top:body?.scrollTop ?? 0,left:body?.scrollLeft ?? 0,strip:app.querySelector('.projects')?.scrollLeft ?? 0};
-  const projects = visibleProjects().sort((a,b) => Number(a.id === activeId) - Number(b.id === activeId));
+  const scroll = {top:body?.scrollTop ?? 0,left:body?.scrollLeft ?? 0,strip:app.querySelector('.projects')?.scrollLeft ?? 0,overview:previous?.querySelector('.overview')?.scrollTop ?? 0};
+  const columnScroll = new Map([...(previous?.querySelectorAll('.column-items') ?? [])].map(element => [element.parentElement.dataset.column,{top:element.scrollTop,left:element.scrollLeft}]));
+  const projects = visibleProjects();
   app.innerHTML = `<div class="shell"><header class="topbar"><strong class="brand">一事</strong><nav aria-label="项目窗口"><button class="nav-item ${view === 'active' ? 'selected' : ''}" data-action="view" data-view="active">项目</button><button class="nav-item ${view === 'archived' ? 'selected' : ''}" data-action="view" data-view="archived">归档</button></nav><div class="topbar-actions"><button class="icon-button save-status" data-save-status data-action="retry"></button>${actionButton('help','帮助','help')}${actionButton('export','导出备份','download')}${view === 'active' ? actionButton('add-project','新建项目','plus') : ''}</div></header><main class="projects" aria-label="${view === 'active' ? '项目' : '归档'}">${projects.map(projectHTML).join('')}</main></div>`;
   renderMath(app);saveLabel();
   const current = app.querySelector('.project.expanded');
   if (previous && previous.id === current?.id) {
     const nextBody = current.querySelector('.project-body');
     nextBody.scrollTop = scroll.top;nextBody.scrollLeft = scroll.left;
+    current.querySelector('.overview').scrollTop = scroll.overview;
+    current.querySelectorAll('.column-items').forEach(element => {
+      const position = columnScroll.get(element.parentElement.dataset.column);
+      if (position) {element.scrollTop = position.top;element.scrollLeft = position.left;}
+    });
   }
   app.querySelector('.projects').scrollLeft = scroll.strip;
   if (editing?.newTask) mountEditor(app.querySelector(`.task-card[data-task="${CSS.escape(editing.taskId)}"] .task-content`));
@@ -280,6 +286,20 @@ function exportBackup() {
   const url = URL.createObjectURL(new Blob([JSON.stringify(exported,null,2)],{type:'application/json'}));
   const link = document.createElement('a');link.href = url;link.download = `一事-备份-${new Date().toLocaleDateString('sv-SE')}.json`;link.click();setTimeout(() => URL.revokeObjectURL(url),1000);
 }
+function revealPendingChildren(project,id) {
+  const ids = new Set(descendants(project,id).filter(task => task.status === 'todo').map(task => task.id));
+  if (!ids.size) return false;
+  const cards = [...app.querySelectorAll('.column.todo .task-card:not(.context)')].filter(card => ids.has(card.dataset.task));
+  if (!cards.length) return false;
+  clearTimeout(pendingTimer);
+  app.querySelectorAll('.pending-attention').forEach(card => card.classList.remove('pending-attention'));
+  void app.offsetWidth;
+  cards.forEach(card => card.classList.add('pending-attention'));
+  cards[0].scrollIntoView({block:'center',inline:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+  cards[0].querySelector('.task-content').focus({preventScroll:true});
+  pendingTimer = setTimeout(() => cards.forEach(card => card.classList.remove('pending-attention')),2400);
+  return true;
+}
 function handleAction(element) {
   const action = element.dataset.action, project = projectById(element.dataset.project);
   const task = project?.tasks.find(task => task.id === element.dataset.task);
@@ -298,7 +318,9 @@ function handleAction(element) {
     case 'edit-summary':beginEditor('summary',project);break;
     case 'edit-task':beginEditor('task',project,task.id);break;
     case 'add-task':addTask(project,element.dataset.parent ?? null);break;
-    case 'complete':change(() => setTaskStatus(project,task.id,task.status === 'done' ? 'doing' : 'done'));break;
+    case 'complete':
+      if (task.status === 'doing' && revealPendingChildren(project,task.id)) break;
+      change(() => setTaskStatus(project,task.id,task.status === 'done' ? 'doing' : 'done'));break;
     case 'status':change(() => setTaskStatus(project,task.id,element.dataset.status));break;
     case 'outdent':reshapeTask(project,task.id,true);break;
     case 'archive':{
@@ -408,7 +430,7 @@ function updateDragTarget() {
 }
 function scrollDrag() {
   if (!dragged?.active) return;
-  const body = dragged.handle.closest('.project-body'), rect = body.getBoundingClientRect();
+  const body = dragged.handle.closest('.column-items'), rect = body.getBoundingClientRect();
   if (dragged.x >= rect.left && dragged.x <= rect.right) body.scrollTop += dragged.y < rect.top+28 ? -12 : dragged.y > rect.bottom-28 ? 12 : 0;
   const projects = app.querySelector('.projects'), bounds = projects.getBoundingClientRect();
   projects.scrollLeft += dragged.x < bounds.left+24 ? -12 : dragged.x > bounds.right-24 ? 12 : 0;
