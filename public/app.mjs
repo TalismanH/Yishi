@@ -11,6 +11,7 @@ const icons = {
   close:'<path d="m6 6 12 12M6 18 18 6"/>',
   download:'<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>',
   trash:'<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>',
+  help:'<circle cx="12" cy="12" r="9"/><path d="M12 7v6m0 4h.01"/>',
 };
 const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]}</svg>`;
 const escape = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -142,7 +143,7 @@ function render() {
   const body = previous?.querySelector('.project-body');
   const scroll = {top:body?.scrollTop ?? 0,left:body?.scrollLeft ?? 0,strip:app.querySelector('.projects')?.scrollLeft ?? 0};
   const projects = visibleProjects().sort((a,b) => Number(a.id === activeId) - Number(b.id === activeId));
-  app.innerHTML = `<div class="shell"><header class="topbar"><strong class="brand">一事</strong><nav aria-label="项目窗口"><button class="nav-item ${view === 'active' ? 'selected' : ''}" data-action="view" data-view="active">项目</button><button class="nav-item ${view === 'archived' ? 'selected' : ''}" data-action="view" data-view="archived">归档</button></nav><div class="topbar-actions"><button class="icon-button save-status" data-save-status data-action="retry"></button>${actionButton('export','导出备份','download')}${view === 'active' ? actionButton('add-project','新建项目','plus') : ''}</div></header><main class="projects" aria-label="${view === 'active' ? '项目' : '归档'}">${projects.map(projectHTML).join('')}</main></div>`;
+  app.innerHTML = `<div class="shell"><header class="topbar"><strong class="brand">一事</strong><nav aria-label="项目窗口"><button class="nav-item ${view === 'active' ? 'selected' : ''}" data-action="view" data-view="active">项目</button><button class="nav-item ${view === 'archived' ? 'selected' : ''}" data-action="view" data-view="archived">归档</button></nav><div class="topbar-actions"><button class="icon-button save-status" data-save-status data-action="retry"></button>${actionButton('help','帮助','help')}${actionButton('export','导出备份','download')}${view === 'active' ? actionButton('add-project','新建项目','plus') : ''}</div></header><main class="projects" aria-label="${view === 'active' ? '项目' : '归档'}">${projects.map(projectHTML).join('')}</main></div>`;
   renderMath(app);saveLabel();
   const current = app.querySelector('.project.expanded');
   if (previous && previous.id === current?.id) {
@@ -244,6 +245,23 @@ function reshapeTask(project, taskId, outdent) {
 }
 
 function closeDialog() {dialog.close();dialog.innerHTML = '';}
+function showHelp() {
+  dialog.innerHTML = `<header class="dialog-header"><h2>帮助</h2>${actionButton('close','关闭','close')}</header><div class="help-content">
+    <h3>软件说明</h3><p>每次展开一个项目。点击项目名、总体情况或事项正文直接编辑，离开编辑区后自动保存并渲染。正文支持 Markdown，行内公式用 <code>$...$</code>，独立公式用 <code>$$...$$</code>。</p>
+    <p>事项最多三级，状态依次为待办项 ↔ 进行中 ↔ 已完成。使用条目按钮切换状态；左侧把手可调整同列顺序与层级，拖动父事项会携带全部子事项。</p>
+    <p>全部事项完成后可归档。归档、删除均需确认；下载按钮可导出全部项目备份。</p>
+    <h3>快捷键</h3><table><tbody>
+      <tr><th scope="row"><kbd>Enter</kbd></th><td>编辑事项时新增同级事项</td></tr>
+      <tr><th scope="row"><kbd>Shift + Enter</kbd></th><td>在当前事项内换行</td></tr>
+      <tr><th scope="row"><kbd>Tab</kbd></th><td>降低层级，空白新增项也适用</td></tr>
+      <tr><th scope="row"><kbd>Shift + Tab</kbd></th><td>提升层级</td></tr>
+      <tr><th scope="row"><kbd>Ctrl + Enter</kbd></th><td>结束编辑并渲染</td></tr>
+      <tr><th scope="row"><kbd>Esc</kbd></th><td>结束编辑、取消拖动或关闭弹框</td></tr>
+      <tr><th scope="row"><kbd>↑ / ↓</kbd></th><td>先点击事项左侧六点图标，再按上下键排序</td></tr>
+      <tr><th scope="row"><kbd>Enter / 空格</kbd></th><td>点击左侧六点图标后，进入正文编辑</td></tr>
+    </tbody></table><p>同级指同一列、同一父事项下的条目。只有一个同级条目，或已到首尾时，对应方向不会继续移动。</p></div><footer class="dialog-footer"><button class="primary" data-action="close">关闭</button></footer>`;
+  dialog.showModal();
+}
 function confirmAction(title, body, button, operation) {
   dialog.innerHTML = `<form><header class="dialog-header"><h2>${escape(title)}</h2>${actionButton('close','关闭','close')}</header><p class="dialog-copy">${body}</p><footer class="dialog-footer"><button type="button" class="secondary" data-action="close">取消</button>${button ? `<button type="submit" class="primary">${button}</button>` : ''}</footer></form>`;
   dialog.showModal();dialog.querySelector('form').addEventListener('submit',event => {event.preventDefault();operation();});
@@ -299,6 +317,7 @@ function handleAction(element) {
       const count = descendants(project,task.id).length;
       confirmAction('删除事项？',`删除「${escape(taskName(task))}」${count ? `及其 ${count} 个子事项` : ''}？`,'确认删除',() => {if (change(() => removeTask(project,task.id))) closeDialog();});break;
     }
+    case 'help':showHelp();break;
     case 'export':exportBackup();break;
     case 'retry':if (conflict) exportBackup();else void save();break;
   }
@@ -363,13 +382,15 @@ function clearDrag() {
   if (previous?.frame) cancelAnimationFrame(previous.frame);
   if (previous?.handle.hasPointerCapture(previous.pointerId)) previous.handle.releasePointerCapture(previous.pointerId);
   app.classList.remove('is-dragging');
-  app.querySelectorAll('.dragging').forEach(element => element.classList.remove('dragging'));
+  app.querySelectorAll('.dragging,.drag-blocked').forEach(element => element.classList.remove('dragging','drag-blocked'));
   clearDropIndicators();
 }
 function dragTarget(x,y) {
   const target = document.elementFromPoint(x,y);
   const column = target?.closest('[data-column]');
   if (!dragged || column?.dataset.project !== dragged.projectId || column.dataset.column !== dragged.status) return null;
+  const group = target.closest('[data-task-group]');
+  if (group && dragged.blockedIds.has(group.dataset.taskGroup)) return null;
   const nest = target.closest('[data-nest]'), card = target.closest('.task-card');
   if (card?.dataset.task === dragged.id) return null;
   if (nest) return {element:nest,kind:'over',options:{parentId:nest.dataset.nest}};
@@ -398,8 +419,11 @@ document.addEventListener('pointerdown',event => {
   if (!handle || event.button !== 0 || !event.isPrimary || dialog.open || conflict) return;
   event.preventDefault();
   if (finishEditor() === false || !handle.isConnected) return;
+  handle.focus({preventScroll:true});
   const card = handle.closest('.task-card');
-  dragged = {id:card.dataset.task,projectId:card.dataset.project,status:card.dataset.columnStatus,handle,pointerId:event.pointerId,x:event.clientX,y:event.clientY,startX:event.clientX,startY:event.clientY,active:false};
+  const blockedIds = new Set([card.dataset.task,...descendants(projectById(card.dataset.project),card.dataset.task).map(task => task.id)]);
+  dragged = {id:card.dataset.task,projectId:card.dataset.project,status:card.dataset.columnStatus,blockedIds,handle,pointerId:event.pointerId,x:event.clientX,y:event.clientY,startX:event.clientX,startY:event.clientY,active:false};
+  app.querySelectorAll('.task-card').forEach(element => {if (blockedIds.has(element.dataset.task)) element.classList.add('drag-blocked');});
   handle.setPointerCapture(event.pointerId);
 });
 document.addEventListener('pointermove',event => {

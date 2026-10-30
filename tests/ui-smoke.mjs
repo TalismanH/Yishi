@@ -56,6 +56,40 @@ try {
   assert.equal((await page.locator('.column.todo .column-heading').textContent()).trim(),'待办项');
   assert.equal(await page.locator('.column.done [data-action="add-task"]').count(),0);
   passed('列顺序为待办项、进行中、已完成，已完成事项没有新增按钮');
+  assert.equal(await page.locator('.overview-header h2').evaluate(element => getComputedStyle(element).fontSize),'16px');
+  assert.ok((await page.locator('.column-heading').evaluateAll(elements => elements.map(element => getComputedStyle(element).fontSize))).every(size => size === '16px'));
+  passed('总体情况和三列标题统一提高到16px');
+
+  for (const id of ['design','interaction']) {
+    const actualSize = await card(id).boundingBox();
+    const ghosts = page.locator(`.task-card.context[data-task="${id}"]`);
+    assert.ok(await ghosts.count() > 0);
+    for (const ghost of await ghosts.all()) {
+      const ghostSize = await ghost.boundingBox();
+      assert.ok(Math.abs(ghostSize.width-actualSize.width) < 1);
+      assert.ok(Math.abs(ghostSize.height-actualSize.height) < 1);
+      assert.equal(await ghost.evaluate(element => getComputedStyle(element).borderTopStyle),'dashed');
+    }
+  }
+  passed('各层级虚线父事项框与对应普通事项框等宽等高，保留虚线样式');
+
+  const beforeHelp = await snapshot();
+  const help = page.locator('.topbar [data-action="help"]');
+  assert.equal((await help.textContent()).trim(),'');
+  assert.equal(await help.evaluate(element => element.nextElementSibling?.dataset.action),'export');
+  assert.equal(await help.locator('svg circle').count(),1);
+  await help.click();
+  assert.equal(await page.locator('dialog[open]').count(),1);
+  assert.equal(await page.locator('dialog input,dialog textarea').count(),0);
+  const shortcuts = (await page.locator('dialog table').textContent()).replace(/\s/g,'');
+  for (const key of ['Enter','Shift+Enter','Tab','Shift+Tab','Ctrl+Enter','Esc','↑','↓']) assert.ok(shortcuts.includes(key));
+  assert.match(await page.locator('dialog').textContent(),/Markdown/);
+  await page.locator('dialog [data-action="close"]').last().click();
+  assert.equal(await page.locator('dialog[open]').count(),0);
+  await help.click();await page.keyboard.press('Escape');
+  assert.equal(await page.locator('dialog[open]').count(),0);
+  assert.deepEqual(await snapshot(),beforeHelp);
+  passed('导出左侧的圆形说明图标提供只读操作说明和快捷键表，可按钮或Esc关闭');
   assert.equal(await page.locator('.project.expanded').count(),1);
   const rails = await page.locator('.project.collapsed').evaluateAll(elements => elements.map(element => ({
     width:element.getBoundingClientRect().width,top:element.getBoundingClientRect().top,height:element.getBoundingClientRect().height,
@@ -147,6 +181,13 @@ try {
   const projectId = created.id;
   const currentProject = async () => (await snapshot()).projects.find(item => item.id === projectId);
   passed('新增项目直接在标题处输入，不弹窗');
+  const emptyTodo = await page.locator('.column.todo').evaluate(element => {
+    const items = element.querySelector('.column-items').getBoundingClientRect(), add = element.querySelector('.add-task').getBoundingClientRect();
+    return {itemsHeight:items.height,itemsTop:items.top,addTop:add.top};
+  });
+  assert.equal(emptyTodo.itemsHeight,0);
+  assert.ok(Math.abs(emptyTodo.addTop-emptyTodo.itemsTop) < 1);
+  passed('待办项为空时新增框紧接列表起点，不保留36px空白');
 
   await page.locator('.column.todo .add-task').click();
   assert.equal(await page.locator('dialog[open]').count(),0);
@@ -169,6 +210,11 @@ try {
   assert.match(created.tasks.find(task => task.id === third).title,/\n\$E=mc\^2\$/);
   assert.equal(await card(third).locator('.katex').count(),1);
   assert.equal(await card(third).locator('[data-action="add-task"]').count(),0);
+  const addDimensions = await page.locator('.column.todo .add-task').boundingBox(), rootDimensions = await card(root).boundingBox(), lastDimensions = await card(third).boundingBox();
+  assert.ok(Math.abs(addDimensions.width-rootDimensions.width) < 1);
+  assert.ok(Math.abs(addDimensions.height-rootDimensions.height) < 1);
+  assert.ok(Math.abs(addDimensions.y-lastDimensions.y-lastDimensions.height-10) < 1);
+  passed('新增框与单行主事项等宽等高，有事项时保持10px行距');
   passed('Enter 连续输入，Tab 创建三级层次，Shift+Enter 换行；中文组合输入不拆分事项');
 
   const beforeBlankIndent = await currentProject();
@@ -227,7 +273,9 @@ try {
   passed('非首个三级事项可从拖动手柄调整同级顺序');
 
   const beforeKeyboard = await currentProject();
-  await card(thirdB).locator('.drag-handle').focus();
+  await card(thirdB).locator('.drag-handle').click();
+  assert.equal(await page.evaluate(() => document.activeElement?.closest('.task-card')?.dataset.task),thirdB);
+  assert.equal(await card(thirdB).locator('.drag-handle').evaluate(element => getComputedStyle(element).outlineStyle),'solid');
   await page.keyboard.press('ArrowDown');await saved();
   created = await currentProject();
   assert.ok(created.tasks.find(task => task.id === thirdB).order > created.tasks.find(task => task.id === third).order);
@@ -236,7 +284,7 @@ try {
   created = await currentProject();
   assert.ok(created.tasks.find(task => task.id === thirdB).order < created.tasks.find(task => task.id === third).order);
   assert.deepEqual(created.tasks.map(({id,parentId,status}) => ({id,parentId,status})),beforeKeyboard.tasks.map(({id,parentId,status}) => ({id,parentId,status})));
-  passed('三级拖动手柄支持键盘上下排序，不改变所属事项或状态');
+  passed('鼠标点击三级事项把手后可连续用上下键排序，不改变所属事项或状态');
 
   const beforeCancelDrag = await currentProject();
   const cancelStart = await card(thirdB).locator('.drag-handle').boundingBox();
@@ -286,6 +334,36 @@ try {
   assert.ok(created.tasks.find(task => task.id === thirdB).order < created.tasks.find(task => task.id === thirdC).order);
   assert.equal(await editor().count(),0);
   passed('三级正文编辑中可直接拖动手柄，先保存编辑且拖动后不误开编辑器');
+
+  const beforeBlockedDrag = await currentProject();
+  const blockedIds = [root,second,third,secondB,thirdB,thirdC];
+  await card(root).locator('.drag-handle').scrollIntoViewIfNeeded();
+  const blockedStart = await card(root).locator('.drag-handle').boundingBox();
+  await page.mouse.move(blockedStart.x+blockedStart.width/2,blockedStart.y+blockedStart.height/2);
+  await page.mouse.down();
+  await page.mouse.move(blockedStart.x+blockedStart.width/2+8,blockedStart.y+blockedStart.height/2,{steps:2});
+  assert.equal(await page.locator('.is-dragging').count(),1);
+  for (const id of blockedIds) assert.equal(await card(id).locator('.drop-nest').isVisible(),false);
+  const dropHints = () => page.locator('.drop-before,.drop-after,.over,.column.drag-over').count();
+  for (const id of [root,second,third]) {
+    const rect = await card(id).boundingBox();
+    await page.mouse.move(rect.x+15,rect.y+rect.height*.1,{steps:4});
+    assert.equal(await dropHints(),0);
+  }
+  const groupGap = await card(second).boundingBox();
+  await page.mouse.move(groupGap.x+3,groupGap.y+groupGap.height+5,{steps:4});
+  assert.equal(await dropHints(),0);
+  const validDrop = await card(rootB).boundingBox();
+  await page.mouse.move(validDrop.x+25,validDrop.y+validDrop.height*.1,{steps:5});
+  assert.equal(await card(rootB).evaluate(element => element.classList.contains('drop-before')),true);
+  assert.equal(await card(rootB).locator('.drop-nest').isVisible(),true);
+  const invalidDrop = await card(secondB).boundingBox();
+  await page.mouse.move(invalidDrop.x+15,invalidDrop.y+invalidDrop.height*.9,{steps:5});
+  assert.equal(await dropHints(),0);
+  await page.mouse.up();await saved();
+  assert.deepEqual(await currentProject(),beforeBlockedDrag);
+  assert.equal(await page.locator('.is-dragging,.drag-blocked,.drop-before,.drop-after,.over,.column.drag-over').count(),0);
+  passed('拖动自身子树隐藏无效落点和列提示，其他落点正常提示，子树内释放不改数据');
 
   for (const id of [rootB,secondB]) {
     await card(id).locator('[data-action="delete-task"]').click();
