@@ -20,22 +20,39 @@ test('seed is valid and demonstrates three hierarchy levels', () => {
   assert.equal(depthOf(state.projects[0], 'drag'), 3);
 });
 
-test('moving a root reorders siblings and carries every descendant to its status', () => {
+test('moving a root reorders siblings and preserves every descendant status', () => {
   const project = fixture();
-  moveTask(project, 'a', { status: 'done' });
+  const statuses = project.tasks.map(task => task.status);
+  moveTask(project, 'a');
   assert.deepEqual(project.tasks.filter(t => t.parentId === null).sort((a, b) => a.order - b.order).map(t => t.id), ['d', 'a']);
-  assert.deepEqual(descendants(project, 'a').map(t => t.status), ['done', 'done']);
+  assert.deepEqual(project.tasks.map(task => task.status), statuses);
   assert.equal(depthOf(project, 'c'), 3);
 });
 
 test('moving second-level task preserves its third-level subtree and changes parent', () => {
   const project = fixture();
-  moveTask(project, 'b', { parentId: 'd', beforeId: 'e', status: 'doing' });
+  moveTask(project, 'b', { parentId: 'd', beforeId: 'e', status: 'todo' });
   assert.equal(project.tasks.find(t => t.id === 'b').parentId, 'd');
   assert.equal(project.tasks.find(t => t.id === 'c').parentId, 'b');
   assert.equal(project.tasks.find(t => t.id === 'b').order, 0);
   assert.equal(project.tasks.find(t => t.id === 'e').order, 1);
-  assert.equal(project.tasks.find(t => t.id === 'c').status, 'doing');
+  assert.equal(project.tasks.find(t => t.id === 'c').status, 'todo');
+});
+
+test('a same-status drag option preserves mixed descendant statuses', () => {
+  const project = fixture();
+  const statuses = project.tasks.map(task => task.status);
+  moveTask(project, 'a', { status: 'doing' });
+  assert.deepEqual(project.tasks.map(task => task.status), statuses);
+});
+
+test('dragging rejects every cross-status change atomically', () => {
+  for (const [id, status] of [['a', 'todo'], ['a', 'done'], ['b', 'doing'], ['b', 'done'], ['d', 'doing'], ['d', 'todo']]) {
+    const project = fixture();
+    const original = structuredClone(project);
+    assert.throws(() => moveTask(project, id, { status }));
+    assert.deepEqual(project, original);
+  }
 });
 
 test('moving a third-level task to the root changes its actual depth', () => {
@@ -56,10 +73,48 @@ test('cycle, excessive depth, invalid sibling and invalid status moves are atomi
 
 test('status shortcut completes a branch but does not change its ancestors', () => {
   const project = fixture();
+  setTaskStatus(project, 'b', 'doing');
   setTaskStatus(project, 'b', 'done');
   assert.equal(project.tasks.find(t => t.id === 'a').status, 'doing');
   assert.deepEqual(descendants(project, 'b').map(t => t.status), ['done']);
   assert.equal(project.tasks.find(t => t.id === 'b').status, 'done');
+});
+
+test('status shortcuts allow every adjacent transition in both directions', () => {
+  const project = fixture();
+  for (const status of ['doing', 'done', 'doing', 'todo']) {
+    setTaskStatus(project, 'b', status);
+    assert.equal(project.tasks.find(task => task.id === 'b').status, status);
+    assert.equal(project.tasks.find(task => task.id === 'c').status, status);
+  }
+});
+
+test('todo and done shortcuts cannot skip directly between each other', () => {
+  for (const [id, status] of [['b', 'done'], ['d', 'todo']]) {
+    const project = fixture();
+    const original = structuredClone(project);
+    assert.throws(() => setTaskStatus(project, id, status));
+    assert.deepEqual(project, original);
+  }
+});
+
+test('a mixed subtree cannot skip a descendant state and leaves the entire branch unchanged', () => {
+  for (const status of ['done', 'todo']) {
+    const project = fixture();
+    if (status === 'todo') project.tasks.find(task => task.id === 'b').status = 'done';
+    const original = structuredClone(project);
+    assert.throws(() => setTaskStatus(project, 'a', status));
+    assert.deepEqual(project, original);
+  }
+});
+
+test('same-state nodes are allowed while other subtree nodes move one adjacent step', () => {
+  const project = fixture();
+  setTaskStatus(project, 'a', 'doing');
+  assert.deepEqual([project.tasks[0], ...descendants(project, 'a')].map(task => task.status), ['doing', 'doing', 'doing']);
+  const original = structuredClone(project);
+  setTaskStatus(project, 'a', 'doing');
+  assert.deepEqual(project, original);
 });
 
 test('deleting a branch removes all descendants and preserves other groups', () => {
@@ -84,6 +139,7 @@ test('progress counts actual tasks and archive requires a nonempty completed pro
   const project = fixture();
   assert.deepEqual(progress(project), { total: 5, done: 1, percent: 20 });
   assert.equal(canArchive(project), false);
+  setTaskStatus(project, 'a', 'doing');
   setTaskStatus(project, 'a', 'done');
   setTaskStatus(project, 'd', 'done');
   assert.equal(canArchive(project), true);

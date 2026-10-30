@@ -1,4 +1,5 @@
-const STATUSES = new Set(['doing', 'todo', 'done']);
+const STATUS_ORDER = ['todo', 'doing', 'done'];
+const STATUSES = new Set(STATUS_ORDER);
 
 function requireTask(project, id) {
   const task = project.tasks.find(task => task.id === id);
@@ -78,8 +79,12 @@ export function validateState(state) {
 
 export function setTaskStatus(project, id, status) {
   if (!STATUSES.has(status)) throw new Error('事项状态不正确');
-  const task = requireTask(project, id);
-  for (const item of [task, ...descendants(project, id)]) item.status = status;
+  const branch = [requireTask(project, id), ...descendants(project, id)];
+  const target = STATUS_ORDER.indexOf(status);
+  if (branch.some(item => !STATUSES.has(item.status) || Math.abs(STATUS_ORDER.indexOf(item.status) - target) > 1)) {
+    throw new Error('请按「待办理 ↔ 进行中 ↔ 已完成」逐步切换，子事项也不能跳级');
+  }
+  for (const item of branch) item.status = status;
 }
 
 export function removeTask(project, id) {
@@ -89,6 +94,9 @@ export function removeTask(project, id) {
 
 export function moveTask(project, id, options = {}) {
   const original = requireTask(project, id);
+  if (options.status !== undefined && options.status !== original.status) {
+    throw new Error('拖动不能改变事项状态，请使用状态按钮');
+  }
   const parentId = options.parentId === undefined ? original.parentId : options.parentId;
   const branchIds = new Set([id, ...descendants(project, id).map(task => task.id)]);
   if (branchIds.has(parentId)) throw new Error('不能移入自己或自己的子事项');
@@ -105,7 +113,6 @@ export function moveTask(project, id, options = {}) {
   }
   siblings.splice(index, 0, moving);
   siblings.forEach((task, order) => { task.order = order; });
-  if (options.status !== undefined) setTaskStatus(next, id, options.status);
   validateState({ version: 1, projects: [next] });
   project.tasks = next.tasks;
 }
