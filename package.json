@@ -4,10 +4,21 @@
   "private": true,
   "type": "module",
   "description": "本地优先的三级事项桌面工作台",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
-    "start": "node server.mjs",
+    "start": "node scripts/tauri.mjs dev --no-dev-server",
+    "start:web": "node server.mjs",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check server.mjs && node --check public/model.mjs && node --check public/app.mjs"
+    "check": "node --check server.mjs && node --check public/model.mjs && node --check public/app.mjs && node --check public/transport.mjs && node --check scripts/tauri.mjs",
+    "tauri": "node scripts/tauri.mjs",
+    "tauri:dev": "node scripts/tauri.mjs dev --no-dev-server",
+    "tauri:check": "node scripts/tauri.mjs check",
+    "tauri:test": "node scripts/tauri.mjs test",
+    "tauri:build": "node scripts/tauri.mjs build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4"
   }
 }

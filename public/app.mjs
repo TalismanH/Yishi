@@ -1,4 +1,5 @@
 import {validateState, depthOf, descendants, moveTask, setTaskStatus, removeTask, progress, canArchive, projectColumn} from './model.mjs';
+import {workspaceRequest, installNativeCloseGuard, installNativeDownloadFeedback} from './transport.mjs';
 
 const icons = {
   check:'<path d="m5 12 4 4L19 6"/>', plus:'<path d="M12 5v14M5 12h14"/>',
@@ -20,6 +21,7 @@ const app = document.querySelector('#app');
 const dialog = document.querySelector('#editor');
 let state, revision, activeId, view = 'active', saving = false, dirty = false, saveError = '', conflict = false, dragged = null;
 let toastTimer, pendingTimer, ignoreDragClick = false;
+let savePromise = Promise.resolve();
 
 // Build Markdown through a strict element/attribute allowlist before inserting it.
 function markdown(source) {
@@ -66,13 +68,15 @@ function saveLabel() {
   element.setAttribute('aria-label',saveError || '重试保存');
 }
 
-async function save() {
-  if (saving || conflict || !dirty) return;
+function save() {
+  if (saving) return savePromise;
+  if (conflict || !dirty) return Promise.resolve();
   saving = true; saveError = ''; saveLabel();
+  savePromise = (async () => {
   try {
     while (dirty) {
       dirty = false;
-      const response = await fetch('/api/state',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({state,revision})});
+      const response = await workspaceRequest('PUT',{state,revision});
       if (response.status === 409) {
         conflict = true;
         throw new Error('数据版本冲突，请先导出备份');
@@ -84,6 +88,8 @@ async function save() {
     dirty = true; saveError = error.message;
     toast(error.message);
   } finally {saving = false;saveLabel();}
+  })();
+  return savePromise;
 }
 
 function change(operation, rerender = true) {
@@ -471,10 +477,13 @@ for (const name of ['pointercancel','lostpointercapture']) document.addEventList
 window.addEventListener('blur',clearDrag);
 window.addEventListener('beforeunload',event => {persistEditor();if (dirty || saving) {event.preventDefault();event.returnValue = '';}});
 try {
-  const response = await fetch('/api/state');
+  const response = await workspaceRequest();
   if (!response.ok) throw new Error('无法读取本地数据');
   const data = await response.json();validateState(data.state);
-  state = data.state;revision = data.revision;activeId = visibleProjects()[0]?.id ?? null;render();
+  state = data.state;revision = data.revision;activeId = visibleProjects()[0]?.id ?? null;
+  await installNativeDownloadFeedback(toast);
+  render();
+  await installNativeCloseGuard({persistEditor,isEmptyDraft:() => Boolean(editing?.newTask && editing.value === ''),save,isPending:() => dirty || saving,hasError:() => Boolean(saveError) || conflict,onError:error => toast(error.message)});
 } catch (error) {
   app.innerHTML = `<div class="load-error" role="alert">${escape(error.message)}</div>`;
 }

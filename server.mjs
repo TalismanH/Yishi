@@ -77,7 +77,7 @@ export async function createTodoServer({ dataDir = path.join(root, 'data') } = {
       }
       if (!['GET', 'HEAD'].includes(request.method)) return send(405, { error: '不支持的请求方法' });
       const staticPath = pathname === '/' ? '/index.html' : pathname;
-      const allowed = ['/index.html', '/app.mjs', '/model.mjs', '/style.css'].includes(staticPath)
+      const allowed = ['/index.html', '/app.mjs', '/model.mjs', '/transport.mjs', '/style.css'].includes(staticPath)
         || /^\/vendor\/[a-zA-Z0-9_./-]+$/.test(staticPath);
       const filenameToServe = path.resolve(publicDir, '.' + staticPath);
       if (!allowed || !filenameToServe.startsWith(publicDir + path.sep) || staticPath.split('/').includes('..')) return send(404, { error: '文件不存在' });
