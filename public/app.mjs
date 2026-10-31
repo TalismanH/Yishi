@@ -13,6 +13,7 @@ const icons = {
   download:'<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>',
   trash:'<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>',
   help:'<circle cx="12" cy="12" r="9"/><path d="M12 7v6m0 4h.01"/>',
+  locate:'<circle cx="12" cy="12" r="6"/><path d="M12 2v5m0 10v5M2 12h5m10 0h5"/>',
 };
 const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]}</svg>`;
 const escape = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -20,24 +21,63 @@ const statuses = {todo:'待办项',doing:'进行中',done:'已完成'};
 const app = document.querySelector('#app');
 const dialog = document.querySelector('#editor');
 let state, revision, activeId, view = 'active', saving = false, dirty = false, saveError = '', conflict = false, dragged = null;
-let toastTimer, pendingTimer, ignoreDragClick = false;
+let toastTimer, pendingTimer, ignoreDragClick = false, editorPointerId = null;
 let savePromise = Promise.resolve();
 
 // Build Markdown through a strict element/attribute allowlist before inserting it.
-function markdown(source) {
+function markdown(source, summary = false) {
   const formulas = [];
   const protectedSource = source.replace(/(```[\s\S]*?```|`[^`\n]+`)|(\$\$[\s\S]*?\$\$|(?<!\\)\$(?!\s)[^$\n]+?\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\])/g, (match, code, math) => {
     if (code) return code;
     return `YISHIFORMULA${formulas.push(math) - 1}END`;
   });
-  const raw = marked.parse(protectedSource, {breaks:true,gfm:true});
+  // A flush-left line in the overview starts a new paragraph, not a list continuation.
+  const content = summary ? marked.lexer(protectedSource).map(token => {
+    if (token.type !== 'list') return token.raw;
+    return token.raw.replace(/\n(?=\S)(?![-+*](?:[ \t]|$)|\d{1,9}[.)](?:[ \t]|$))/g,'\n\n');
+  }).join('') : protectedSource;
+  const options = {breaks:true,gfm:true};
+  const ranges = new WeakMap();
+  if (summary) {
+    let sourceLine = 0, protectedLine = 0, line = 0;
+    const protectedLines = protectedSource.replace(/\r\n?/g,'\n').split('\n');
+    const sourceLines = protectedLines.map(text => {
+      const start = sourceLine++;
+      for (const match of text.matchAll(/YISHIFORMULA(\d+)END/g)) sourceLine += (formulas[match[1]].match(/\n/g) ?? []).length;
+      return start;
+    });
+    const lineMap = content.split('\n').map(text => {
+      const original = sourceLines[protectedLine];
+      if (text === protectedLines[protectedLine]) protectedLine++;
+      return original;
+    });
+    options.renderer = new marked.Renderer();
+    for (const type of ['paragraph','heading','list','blockquote','code','table']) {
+      options.renderer[type] = function(token) {
+        const html = marked.Renderer.prototype[type].call(this,token), range = ranges.get(token);
+        return range ? html.replace(/^(<\w+)/,`$1 data-source-start="${range.start}" data-source-end="${range.end}"`) : html;
+      };
+    }
+    const tokens = marked.lexer(content,options);
+    for (const token of tokens) {
+      const start = lineMap[line];
+      line += (token.raw.match(/\n/g) ?? []).length;
+      ranges.set(token,{start,end:lineMap[line] ?? sourceLine-1});
+    }
+    options.tokens = tokens;
+  }
+  const raw = summary ? marked.parser(options.tokens,options) : marked.parse(content,options);
   const template = document.createElement('template');
   template.innerHTML = raw;
   const allowed = new Set(['P','BR','STRONG','EM','DEL','CODE','PRE','BLOCKQUOTE','UL','OL','LI','H1','H2','H3','H4','H5','H6','HR','A','TABLE','THEAD','TBODY','TR','TD','TH']);
   for (const element of [...template.content.querySelectorAll('*')]) {
     if (!allowed.has(element.tagName)) {element.replaceWith(document.createTextNode(element.textContent)); continue;}
     const href = element.getAttribute('href');
+    const sourceStart = element.getAttribute('data-source-start'), sourceEnd = element.getAttribute('data-source-end');
     for (const attr of [...element.attributes]) element.removeAttribute(attr.name);
+    if (summary && /^\d+$/.test(sourceStart ?? '') && /^\d+$/.test(sourceEnd ?? '')) {
+      element.dataset.sourceStart = sourceStart;element.dataset.sourceEnd = sourceEnd;
+    }
     if (element.tagName === 'A' && href && /^https?:\/\//i.test(href)) {
       element.setAttribute('href',href); element.setAttribute('target','_blank'); element.setAttribute('rel','noopener noreferrer');
     }
@@ -114,7 +154,7 @@ function editable(type, project, value, taskId = '') {
   const attrs = `data-project="${escape(project.id)}" ${taskId ? `data-task="${escape(taskId)}"` : ''}`;
   const action = type === 'task' ? 'edit-task' : type === 'summary' ? 'edit-summary' : 'edit-name';
   const label = type === 'task' ? '编辑事项' : type === 'summary' ? '编辑总体情况' : '编辑项目名称';
-  return `<div class="${className} ${type !== 'name' ? 'markdown' : ''}" ${!project.archivedAt ? `data-action="${action}" role="button" tabindex="0" aria-label="${label}"` : ''} ${attrs}>${type === 'name' ? escape(value) : markdown(value)}</div>`;
+  return `<div class="${className} ${type !== 'name' ? 'markdown' : ''}" ${!project.archivedAt ? `data-action="${action}" role="button" tabindex="0" aria-label="${label}"` : ''} ${attrs}>${type === 'name' ? escape(value) : markdown(value,type === 'summary')}</div>`;
 }
 
 function taskHTML(node, project, status) {
@@ -124,7 +164,7 @@ function taskHTML(node, project, status) {
   return `<div class="task-group" data-task-group="${escape(task.id)}">
     <article class="task-card ${context ? 'context' : ''} ${task.status === 'done' && !context ? 'completed' : ''}" ${attrs} data-column-status="${status}">
       <div class="task-main">${context ? icon('branch') : `${!readonly ? `<span class="drag-handle" role="button" tabindex="0" aria-label="拖动事项：${escape(taskName(task))}" title="拖动；↑↓调整顺序">${icon('grip')}</span>` : ''}${task.status !== 'todo' ? `<button type="button" class="task-check ${task.status === 'done' ? 'checked' : ''}" data-action="complete" ${attrs} aria-label="${task.status === 'done' ? '恢复进行中' : '完成事项'}" title="${task.status === 'done' ? '恢复进行中' : '完成事项'}" ${readonly ? 'disabled' : ''}>${task.status === 'done' ? icon('check') : ''}</button>` : ''}`}${editable('task',project,task.title,task.id)}</div>
-      ${!context && !readonly ? `<div class="task-actions">${task.status === 'todo' ? actionButton('status','开始办理','play',`${attrs} data-status="doing"`) : task.status === 'doing' ? actionButton('status','移回待办','pause',`${attrs} data-status="todo"`) : ''}${level < 3 && task.status !== 'done' ? actionButton('add-task','新增子事项','plus',`${attrs} data-parent="${escape(task.id)}"`) : ''}${task.parentId !== null ? actionButton('outdent','提升一级','branch',attrs) : ''}${actionButton('delete-task','删除事项','close',attrs)}</div>` : ''}
+      <div class="task-actions">${level < 3 ? actionButton('locate-task','定位其他列中的同一事项','locate',attrs) : ''}${!context && !readonly ? `${task.status === 'todo' ? actionButton('status','开始办理','play',`${attrs} data-status="doing"`) : task.status === 'doing' ? actionButton('status','移回待办','pause',`${attrs} data-status="todo"`) : ''}${level < 3 && task.status !== 'done' ? actionButton('add-task','新增子事项','plus',`${attrs} data-parent="${escape(task.id)}"`) : ''}${task.parentId !== null ? actionButton('outdent','提升一级','branch',attrs) : ''}${actionButton('delete-task','删除事项','close',attrs)}` : ''}</div>
       ${!readonly && !context && level < 3 ? `<div class="drop-nest" data-nest="${escape(task.id)}" aria-label="作为子事项" title="作为子事项">${icon('branch')}</div>` : ''}
     </article>${children.length ? `<div class="task-children">${children.map(child => taskHTML(child,project,status)).join('')}</div>` : ''}
   </div>`;
@@ -147,8 +187,8 @@ function projectHTML(project) {
 function render() {
   const previous = app.querySelector('.project.expanded');
   const body = previous?.querySelector('.project-body');
-  const scroll = {top:body?.scrollTop ?? 0,left:body?.scrollLeft ?? 0,strip:app.querySelector('.projects')?.scrollLeft ?? 0,overview:previous?.querySelector('.overview')?.scrollTop ?? 0};
-  const columnScroll = new Map([...(previous?.querySelectorAll('.column-items') ?? [])].map(element => [element.parentElement.dataset.column,{top:element.scrollTop,left:element.scrollLeft}]));
+  const scroll = {top:body?.scrollTop ?? 0,left:body?.scrollLeft ?? 0,strip:app.querySelector('.projects')?.scrollLeft ?? 0,overview:previous?.querySelector('.overview-content')?.scrollTop ?? 0};
+  const columnScroll = new Map([...(previous?.querySelectorAll('.column-items') ?? [])].map(element => [element.parentElement.dataset.column,{top:element.scrollTop,left:element.scrollLeft,paddingBottom:element.style.paddingBottom}]));
   const projects = visibleProjects();
   app.innerHTML = `<div class="shell"><header class="topbar"><strong class="brand">一事</strong><nav aria-label="项目窗口"><button class="nav-item ${view === 'active' ? 'selected' : ''}" data-action="view" data-view="active">项目</button><button class="nav-item ${view === 'archived' ? 'selected' : ''}" data-action="view" data-view="archived">归档</button></nav><div class="topbar-actions"><button class="icon-button save-status" data-save-status data-action="retry"></button>${actionButton('help','帮助','help')}${actionButton('export','导出备份','download')}${view === 'active' ? actionButton('add-project','新建项目','plus') : ''}</div></header><main class="projects" aria-label="${view === 'active' ? '项目' : '归档'}">${projects.map(projectHTML).join('')}</main></div>`;
   renderMath(app);saveLabel();
@@ -156,10 +196,10 @@ function render() {
   if (previous && previous.id === current?.id) {
     const nextBody = current.querySelector('.project-body');
     nextBody.scrollTop = scroll.top;nextBody.scrollLeft = scroll.left;
-    current.querySelector('.overview').scrollTop = scroll.overview;
+    current.querySelector('.overview-content').scrollTop = scroll.overview;
     current.querySelectorAll('.column-items').forEach(element => {
       const position = columnScroll.get(element.parentElement.dataset.column);
-      if (position) {element.scrollTop = position.top;element.scrollLeft = position.left;}
+      if (position) {element.style.paddingBottom = position.paddingBottom;element.scrollTop = position.top;element.scrollLeft = position.left;}
     });
   }
   app.querySelector('.projects').scrollLeft = scroll.strip;
@@ -168,7 +208,48 @@ function render() {
 
 let editing = null, editTimer;
 function fitEditor(input) {
-  if (input.tagName === 'TEXTAREA') {input.style.height = '0';input.style.height = `${input.scrollHeight}px`;}
+  if (input.tagName !== 'TEXTAREA') return;
+  const pane = input.closest('.overview-content,.column-items'), top = pane.scrollTop;
+  // Keep the scroll container tall while measuring a shrinking textarea.
+  const element = input.parentElement;
+  element.style.minHeight = `${element.getBoundingClientRect().height}px`;
+  input.style.height = '0';input.style.height = `${input.scrollHeight}px`;
+  element.style.minHeight = '';pane.scrollTop = top;
+}
+function summaryCursor(element,value,point) {
+  const caret = document.caretRangeFromPoint(point.clientX,point.clientY);
+  const node = caret?.startContainer, target = node?.nodeType === Node.TEXT_NODE ? node.parentElement : document.elementFromPoint(point.clientX,point.clientY);
+  const block = target?.closest('[data-source-start]');
+  if (!block || !element.contains(block)) return 0;
+  const lines = value.replace(/\r\n?/g,'\n').split('\n');
+  const start = Number(block.dataset.sourceStart), end = Number(block.dataset.sourceEnd);
+  const text = node?.nodeType === Node.TEXT_NODE ? node.textContent : '';
+  const offset = caret?.startOffset ?? 0, lineStart = text.lastIndexOf('\n',offset-1)+1;
+  const fragment = text.slice(lineStart,text.indexOf('\n',offset) < 0 ? text.length : text.indexOf('\n',offset)).trim();
+  let occurrence = text.slice(0,lineStart).split('\n').filter(line => fragment && line.trim() === fragment).length;
+  if (fragment) {
+    const walker = document.createTreeWalker(block,NodeFilter.SHOW_TEXT);
+    while (walker.nextNode() && walker.currentNode !== node) {
+      if (!walker.currentNode.parentElement.closest('.katex')) occurrence += walker.currentNode.textContent.split('\n').filter(line => line.trim() === fragment).length;
+    }
+  }
+  const candidates = [];
+  for (let index=start;index<=end && index<lines.length;index++) if (fragment && lines[index].includes(fragment)) candidates.push(index);
+  // shortcut: unmatched formula glyphs use the block's first line; refine if formula-row editing is needed.
+  const line = candidates[Math.min(occurrence,candidates.length-1)] ?? start;
+  const column = candidates.length ? Math.max(0,lines[line].indexOf(fragment))+Math.max(0,offset-lineStart) : 0;
+  return lines.slice(0,line).join('\n').length+(line ? 1 : 0)+column;
+}
+function showEditorCursor(input,cursor,point) {
+  input.setSelectionRange(cursor,cursor);input.scrollTop = 0;
+  const mirror = document.createElement('div'), style = getComputedStyle(input);
+  for (const property of ['font','lineHeight','letterSpacing','tabSize','overflowWrap','padding','boxSizing']) mirror.style[property] = style[property];
+  Object.assign(mirror.style,{position:'absolute',left:'-10000px',top:'0',width:`${input.getBoundingClientRect().width}px`,whiteSpace:'pre-wrap',visibility:'hidden'});
+  mirror.textContent = input.value.slice(0,cursor);
+  const marker = document.createElement('span');marker.textContent = input.value.slice(cursor) || '\u200b';mirror.append(marker);document.body.append(mirror);
+  const pane = input.closest('.overview-content');
+  pane.scrollTop += input.getBoundingClientRect().top+marker.offsetTop-point.clientY;
+  mirror.remove();
 }
 function mountEditor(element) {
   editing.element = element;
@@ -177,17 +258,22 @@ function mountEditor(element) {
   input.setAttribute('aria-label',editing.type === 'task' ? '事项正文' : editing.type === 'summary' ? '总体情况正文' : '项目名称');
   input.maxLength = editing.type === 'name' ? 120 : editing.type === 'summary' ? 100000 : 20000;
   input.value = editing.value;input.spellcheck = false;
+  const pane = element.closest('.overview-content,.column-items'), top = pane?.scrollTop;
   element.classList.add('editing');element.replaceChildren(input);
-  input.focus();input.setSelectionRange(input.value.length,input.value.length);fitEditor(input);
+  fitEditor(input);input.focus({preventScroll:true});input.setSelectionRange(input.value.length,input.value.length);
+  if (pane) pane.scrollTop = top;
+  if (editing.point) showEditorCursor(input,editing.cursor,editing.point);
 }
-function beginEditor(type, project, taskId = null) {
+function beginEditor(type, project, taskId = null, point = null) {
   if (finishEditor() === false) return;
   if (conflict) {toast('数据版本冲突，请先导出备份');return;}
   if (project.archivedAt) return;
   const value = type === 'name' ? project.name : type === 'summary' ? project.summary : project.tasks.find(task => task.id === taskId).title;
   editing = {type,projectId:project.id,taskId,value,newTask:null};
   const root = document.getElementById(`project-${project.id}`);
-  mountEditor(root.querySelector(type === 'name' ? '.project-name' : type === 'summary' ? '.overview-content' : `.task-card[data-task="${CSS.escape(taskId)}"]:not(.context) .task-content`));
+  const element = root.querySelector(type === 'name' ? '.project-name' : type === 'summary' ? '.overview-content' : `.task-card[data-task="${CSS.escape(taskId)}"]:not(.context) .task-content`);
+  if (type === 'summary' && point) {editing.cursor = summaryCursor(element,value,point);editing.point = point;}
+  mountEditor(element);
 }
 function persistEditor() {
   clearTimeout(editTimer);
@@ -217,7 +303,7 @@ function finishEditor() {
   if (edit.newTask) {edit.element.closest('.task-group').remove();return;}
   const project = projectById(edit.projectId);
   const value = edit.type === 'name' ? project.name : edit.type === 'summary' ? project.summary : project.tasks.find(task => task.id === edit.taskId)?.title;
-  edit.element.classList.remove('editing');edit.element.innerHTML = edit.type === 'name' ? escape(value) : markdown(value ?? '');renderMath(edit.element);
+  edit.element.classList.remove('editing');edit.element.innerHTML = edit.type === 'name' ? escape(value) : markdown(value ?? '',edit.type === 'summary');renderMath(edit.element);
   if (edit.type === 'task') app.querySelectorAll(`.task-card[data-task="${CSS.escape(edit.taskId)}"] .task-content`).forEach(element => {
     if (element !== edit.element) {element.innerHTML = markdown(value ?? '');renderMath(element);}
   });
@@ -228,6 +314,7 @@ function addTask(project, parentId = null, beforeId = null, value = '') {
   const draft = {id:crypto.randomUUID(),parentId,title:value,status:'todo',order:Math.max(-1,...siblings.map(task => task.order))+1};
   editing = {type:'task',projectId:project.id,taskId:draft.id,value,newTask:draft,beforeId};
   render();
+  if (project.tasks.find(task => task.id === parentId)?.status === 'doing') scrollCardToTop(editing.element.closest('.task-card'));
 }
 function reshapeTask(project, taskId, outdent) {
   const draft = editing?.newTask?.id === taskId ? editing.newTask : null;
@@ -261,8 +348,10 @@ function showHelp() {
   dialog.innerHTML = `<header class="dialog-header"><h2>帮助</h2>${actionButton('close','关闭','close')}</header><div class="help-content">
     <h3>软件说明</h3><p>每次展开一个项目。点击项目名、总体情况或事项正文直接编辑，离开编辑区后自动保存并渲染。正文支持 Markdown，行内公式用 <code>$...$</code>，独立公式用 <code>$$...$$</code>。</p>
     <p>事项最多三级，状态依次为待办项 ↔ 进行中 ↔ 已完成。使用条目按钮切换状态；左侧把手可调整同列顺序与层级，拖动父事项会携带全部子事项。</p>
+    <p>一级、二级事项的定位按钮可滚动并高亮其他列中的同一事项，包括虚线条目。总体情况中，分点后的普通行顶格书写即可退出列表；缩进书写仍作为列表内容。</p>
     <p>全部事项完成后可归档。归档、删除均需确认；下载按钮可导出全部项目备份。</p>
     <h3>快捷键</h3><table><tbody>
+      <tr><th scope="row"><kbd>Ctrl + B</kbd></th><td>总体情况或事项正文中加粗选中文字，再按一次取消；未选中时插入加粗标记</td></tr>
       <tr><th scope="row"><kbd>Enter</kbd></th><td>编辑事项时新增同级事项</td></tr>
       <tr><th scope="row"><kbd>Shift + Enter</kbd></th><td>在当前事项内换行</td></tr>
       <tr><th scope="row"><kbd>Tab</kbd></th><td>降低层级，空白新增项也适用</td></tr>
@@ -297,19 +386,38 @@ function revealPendingChildren(project,id) {
   if (!ids.size) return false;
   const cards = [...app.querySelectorAll('.column.todo .task-card:not(.context)')].filter(card => ids.has(card.dataset.task));
   if (!cards.length) return false;
+  highlightCards(cards);
+  scrollCardToTop(cards[0]);
+  cards[0].querySelector('.task-content').focus({preventScroll:true});
+  return true;
+}
+function highlightCards(cards) {
   clearTimeout(pendingTimer);
   app.querySelectorAll('.pending-attention').forEach(card => card.classList.remove('pending-attention'));
   void app.offsetWidth;
   cards.forEach(card => card.classList.add('pending-attention'));
-  cards[0].scrollIntoView({block:'center',inline:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
-  cards[0].querySelector('.task-content').focus({preventScroll:true});
   pendingTimer = setTimeout(() => cards.forEach(card => card.classList.remove('pending-attention')),2400);
-  return true;
 }
-function handleAction(element) {
+function revealTask(element) {
+  const source = element.closest('.task-card');
+  const cards = [...app.querySelectorAll('.task-card')].filter(card => card.dataset.project === source.dataset.project && card.dataset.task === source.dataset.task && card.dataset.columnStatus !== source.dataset.columnStatus);
+  highlightCards(cards);
+  cards.forEach(scrollCardToTop);
+}
+function scrollCardToTop(card) {
+  const pane = card.closest('.column-items');
+  pane.style.paddingBottom = '';
+  const bounds = pane.getBoundingClientRect(), rect = card.getBoundingClientRect();
+  const top = pane.scrollTop+rect.top-bounds.top;
+  const end = pane.scrollTop+pane.lastElementChild.getBoundingClientRect().bottom-bounds.top;
+  // Leave enough scroll space below boundary items to align them with the column top.
+  pane.style.paddingBottom = `${Math.max(0,pane.clientHeight-(end-top))}px`;
+  pane.scrollTo({top,behavior:editing?.newTask?.id === card.dataset.task || matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'});
+}
+function handleAction(element, point = null) {
   const action = element.dataset.action, project = projectById(element.dataset.project);
   const task = project?.tasks.find(task => task.id === element.dataset.task);
-  if (project?.archivedAt && !['toggle','restore','delete-project'].includes(action)) return;
+  if (project?.archivedAt && !['toggle','restore','delete-project','locate-task'].includes(action)) return;
   switch (action) {
     case 'close':closeDialog();break;
     case 'toggle':activeId = activeId === project.id ? null : project.id;render();break;
@@ -321,8 +429,9 @@ function handleAction(element) {
       }break;
     }
     case 'edit-name':beginEditor('name',project);break;
-    case 'edit-summary':beginEditor('summary',project);break;
+    case 'edit-summary':beginEditor('summary',project,null,point);break;
     case 'edit-task':beginEditor('task',project,task.id);break;
+    case 'locate-task':revealTask(element);break;
     case 'add-task':addTask(project,element.dataset.parent ?? null);break;
     case 'complete':
       if (task.status === 'doing' && revealPendingChildren(project,task.id)) break;
@@ -352,10 +461,11 @@ function handleAction(element) {
 }
 document.addEventListener('click',event => {
   if (ignoreDragClick) {event.preventDefault();return;}
+  if (editorPointerId !== null && event.pointerId === editorPointerId) {editorPointerId = null;return;}
   if (event.target.closest('[data-inline-editor]') || event.target.closest('.markdown a[href]')) return;
   const element = event.target.closest('[data-action]');
   if (finishEditor() === false && !['export','retry'].includes(element?.dataset.action)) return;
-  if (element) {event.preventDefault();handleAction(element);}
+  if (element) {event.preventDefault();handleAction(element,event.detail ? event : null);}
 });
 document.addEventListener('input',event => {
   if (!event.target.matches('[data-inline-editor]') || !editing) return;
@@ -382,6 +492,19 @@ document.addEventListener('keydown',event => {
     }
   }
   if (event.target.matches('[data-inline-editor]') && editing) {
+    if (editing.type !== 'name' && (event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'b') {
+      event.preventDefault();
+      const input = event.target, {value,selectionStart:start,selectionEnd:end} = input;
+      const selected = value.slice(start,end);
+      const outside = value.slice(Math.max(0,start-2),start) === '**' && value.slice(end,end+2) === '**';
+      const inside = selected.length >= 4 && selected.startsWith('**') && selected.endsWith('**');
+      const text = inside ? selected.slice(2,-2) : outside ? selected : `**${selected}**`;
+      const from = outside ? start-2 : start, to = outside ? end+2 : end;
+      if (value.length-(to-from)+text.length > input.maxLength) {toast('正文已达到字数上限');return;}
+      input.setRangeText(text,from,to,'select');
+      if (!inside && !outside) input.setSelectionRange(start+2,end+2);
+      input.dispatchEvent(new Event('input',{bubbles:true}));return;
+    }
     if (event.key === 'Escape' || event.key === 'Enter' && (editing.type === 'name' || event.ctrlKey || event.metaKey)) {event.preventDefault();finishEditor();return;}
     if (editing.type !== 'task') return;
     if (conflict && (event.key === 'Tab' || event.key === 'Enter' && !event.shiftKey)) {event.preventDefault();toast('数据版本冲突，请先导出备份');return;}
@@ -443,6 +566,7 @@ function scrollDrag() {
   updateDragTarget();dragged.frame = requestAnimationFrame(scrollDrag);
 }
 document.addEventListener('pointerdown',event => {
+  editorPointerId = event.target.closest('[data-inline-editor]') ? event.pointerId : null;
   const handle = event.target.closest('.drag-handle');
   if (!handle || event.button !== 0 || !event.isPrimary || dialog.open || conflict) return;
   event.preventDefault();

@@ -96,7 +96,7 @@ try {
   assert.equal(await page.locator('dialog[open]').count(),1);
   assert.equal(await page.locator('dialog input,dialog textarea').count(),0);
   const shortcuts = (await page.locator('dialog table').textContent()).replace(/\s/g,'');
-  for (const key of ['Enter','Shift+Enter','Tab','Shift+Tab','Ctrl+Enter','Esc','↑','↓']) assert.ok(shortcuts.includes(key));
+  for (const key of ['Ctrl+B','Enter','Shift+Enter','Tab','Shift+Tab','Ctrl+Enter','Esc','↑','↓']) assert.ok(shortcuts.includes(key));
   assert.match(await page.locator('dialog').textContent(),/Markdown/);
   await page.locator('dialog [data-action="close"]').last().click();
   assert.equal(await page.locator('dialog[open]').count(),0);
@@ -145,6 +145,125 @@ try {
   assert.equal(await page.locator('.overview script,.overview [onclick],.overview a[href^="javascript:"]').count(),0);
   assert.equal(await page.evaluate(() => Boolean(window.bad)),false);
   passed('总体情况原位编辑、失焦后渲染 Markdown/公式并过滤危险 HTML');
+
+  await page.locator('[data-action="edit-summary"]').click();
+  await editor().fill('前文 加粗 后文');
+  await editor().evaluate(element => element.setSelectionRange(3,5));
+  await editor().press('Control+b');
+  assert.equal(await editor().inputValue(),'前文 **加粗** 后文');
+  assert.deepEqual(await editor().evaluate(element => [element.selectionStart,element.selectionEnd]),[5,7]);
+  await editor().press('Control+b');
+  assert.equal(await editor().inputValue(),'前文 加粗 后文');
+  await editor().press('Control+b');await finish();
+  assert.equal(await page.locator('.overview strong').textContent(),'加粗');
+  assert.equal((await snapshot()).projects[0].summary,'前文 **加粗** 后文');
+  await page.locator('[data-action="edit-summary"]').click();
+  await editor().fill('');await editor().press('Control+b');
+  assert.equal(await editor().inputValue(),'****');
+  assert.deepEqual(await editor().evaluate(element => [element.selectionStart,element.selectionEnd]),[2,2]);
+  await page.keyboard.insertText('加');
+  await finish();
+  assert.equal(await page.locator('.overview strong').textContent(),'加');
+  await card('notes').locator('.task-content').click();
+  const originalNote = await editor().inputValue();
+  await editor().press('Control+a');await editor().press('Control+b');await finish();
+  assert.equal(await card('notes').locator('strong').textContent(),originalNote);
+  await card('notes').locator('.task-content').click();
+  await editor().press('Control+a');await editor().press('Control+b');
+  assert.equal(await editor().inputValue(),originalNote);
+  await editor().fill('x'.repeat(20000));await editor().press('Control+a');await editor().press('Control+b');
+  assert.equal(await editor().inputValue(),'x'.repeat(20000));
+  await finish(originalNote);
+  passed('总体情况和事项 Ctrl+B 支持选区加粗、重复取消、空选区输入，并遵守字数上限及自动保存');
+
+  for (const type of ['summary','task']) {
+    await (type === 'summary' ? page.locator('[data-action="edit-summary"]') : card('notes').locator('.task-content')).click();
+    await editor().fill('拖选第一行内容\n拖选第二行内容');
+    const box = await editor().boundingBox();
+    await page.mouse.move(box.x+5,box.y+8);await page.mouse.down();
+    await page.mouse.move(box.x+box.width+20,box.y+box.height-5,{steps:8});await page.mouse.up();
+    assert.equal(await editor().count(),1);
+    const selection = await editor().evaluate(element => [element.selectionStart,element.selectionEnd]);
+    assert.ok(selection[1] > selection[0],`${type} selection: ${selection}`);
+    await editor().press('Control+b');
+    assert.ok((await editor().inputValue()).includes('**'));
+    if (type === 'task') await editor().fill(originalNote);
+    await page.locator('.column-heading').first().click();
+    assert.equal(await editor().count(),0);await saved();
+  }
+  passed('总体情况和事项拖选到文本框外保留编辑与选区，后续独立点击仍正常结束编辑');
+
+  const listMarkdown = '- 第一项\n普通行不缩进\n- 第二项\n- 第三项\n  这是明确缩进的续行\n  - 嵌套项目\n\n```text\n- 代码中的分点\n代码中的下一行\n```\n\n    - 缩进代码\n    代码续行\n\n公式 $x^2$';
+  await page.locator('[data-action="edit-summary"]').click();await finish(listMarkdown);
+  const overviewMarkup = () => page.locator('.overview-content').evaluate(element => ({
+    plain:[...element.querySelectorAll(':scope > p')].map(paragraph => paragraph.textContent),
+    items:[...element.querySelectorAll(':scope > ul > li')].map(item => item.textContent),
+    nested:element.querySelector('ul ul li')?.textContent,
+    code:[...element.querySelectorAll('pre code')].map(code => code.textContent),
+  }));
+  const listResult = await overviewMarkup();
+  assert.ok(listResult.plain.includes('普通行不缩进'));
+  assert.equal(listResult.items[0],'第一项');
+  assert.ok(listResult.items.some(item => item.includes('第三项') && item.includes('这是明确缩进的续行')));
+  assert.equal(listResult.nested,'嵌套项目');
+  assert.deepEqual(listResult.code,['- 代码中的分点\n代码中的下一行\n','- 缩进代码\n代码续行\n']);
+  assert.equal(await page.locator('.overview .katex').count(),1);
+  assert.equal((await snapshot()).projects[0].summary,listMarkdown);
+  await page.reload();await saved();
+  assert.deepEqual(await overviewMarkup(),listResult);
+  assert.equal((await snapshot()).projects[0].summary,listMarkdown);
+  passed('分点后的顶格普通行退出列表，连续列表、明确缩进、嵌套、代码与公式保留，重开与原文保存一致');
+
+  async function clickSummaryText(surface, selector, text) {
+    const target = surface.locator(selector).filter({hasText:text}).last();
+    await target.evaluate(element => element.scrollIntoView({block:'center',inline:'nearest'}));
+    const point = await target.evaluate((element,text) => {
+      const walker=document.createTreeWalker(element,NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const offset=walker.currentNode.textContent.indexOf(text);
+        if (offset < 0) continue;
+        const range=document.createRange();range.setStart(walker.currentNode,offset);range.setEnd(walker.currentNode,offset+1);
+        const rect=range.getBoundingClientRect();return {x:rect.x+rect.width/2,y:rect.y+rect.height/2};
+      }
+      throw new Error(`Missing rendered text: ${text}`);
+    },text);
+    await surface.mouse.click(point.x,point.y);
+    return point;
+  }
+  for (const [selector,text] of [['.overview-content > p','普通行不缩进'],['.overview-content ul ul li','嵌套项目'],['.overview-content pre code','代码中的下一行']]) {
+    await clickSummaryText(page,selector,text);
+    const position = await editor().evaluate(element => ({cursor:element.selectionStart,value:element.value}));
+    const start = listMarkdown.lastIndexOf('\n',listMarkdown.indexOf(text))+1;
+    const end = listMarkdown.indexOf('\n',listMarkdown.indexOf(text));
+    assert.ok(position.cursor >= start && position.cursor <= (end < 0 ? listMarkdown.length : end),JSON.stringify({text,...position}));
+    await finish();
+  }
+  passed('总体情况点击普通行、嵌套列表和代码行，编辑光标落在对应源行');
+
+  const wrappedText = `${'wrapped words for the overview '.repeat(30)}WRAPTARGET ${'后续文字'.repeat(20)}`;
+  const clickSource = `## 点击标题\n\n重复的 **文字**\n\n重复的 **文字**\n\n- 重复条目\n- 重复条目\n\n${wrappedText}`;
+  await page.locator('[data-action="edit-summary"]').click();await finish(clickSource);
+  for (const [selector,text] of [['.overview-content h2','点击标题'],['.overview-content strong','文字'],['.overview-content li','重复条目'],['.overview-content p','WRAPTARGET']]) {
+    const point = await clickSummaryText(page,selector,text);
+    const cursor = await editor().evaluate(element => element.selectionStart);
+    const expected = text === '文字' ? clickSource.lastIndexOf('**文字**')+2 : clickSource.lastIndexOf(text), start = clickSource.lastIndexOf('\n',expected)+1;
+    const end = clickSource.indexOf('\n',expected);
+    assert.ok(cursor >= start && cursor <= (end < 0 ? clickSource.length : end),JSON.stringify({text,cursor,start,end}));
+    if (text === 'WRAPTARGET') {
+      assert.ok(Math.abs(cursor-expected) <= 1,JSON.stringify({cursor,expected}));
+      const caretTop = await editor().evaluate(element => {
+        const style=getComputedStyle(element), mirror=document.createElement('div');
+        for (const key of ['font','lineHeight','letterSpacing','tabSize','overflowWrap','padding','boxSizing']) mirror.style[key]=style[key];
+        Object.assign(mirror.style,{position:'absolute',left:'-10000px',top:'0',width:`${element.clientWidth}px`,whiteSpace:'pre-wrap'});
+        mirror.textContent=element.value.slice(0,element.selectionStart);
+        const marker=document.createElement('span');marker.textContent=element.value.slice(element.selectionStart);mirror.append(marker);document.body.append(mirror);
+        const top=element.getBoundingClientRect().top+marker.offsetTop;mirror.remove();return top;
+      });
+      assert.ok(Math.abs(caretTop-point.y) < 26,JSON.stringify({caretTop,point}));
+    }
+    await finish();
+  }
+  passed('总体情况标题、重复段落/列表和软换行均映射到点击源行，软换行光标保持可见');
 
   assert.equal(await page.locator('.column.todo .task-check').count(),0);
   assert.equal(await page.locator('.column.done [data-action="status"][data-status="todo"]').count(),0);
@@ -578,6 +697,7 @@ try {
     {id:'focus-second',parentId:'focus-parent',title:'有待办子事项的二级事项',status:'doing',order:0},
     {id:'focus-first',parentId:'focus-second',title:'第一个待办子事项',status:'todo',order:0},
     {id:'focus-next',parentId:'focus-second',title:'第二个待办子事项',status:'todo',order:1},
+    {id:'focus-done',parentId:'focus-second',title:'已经完成的子事项',status:'done',order:2},
     {id:'focus-direct',parentId:'focus-parent',title:'直接待办子事项',status:'todo',order:1},
     {id:'ready-parent',parentId:null,title:'可完成的主事项',status:'doing',order:101},
     {id:'ready-child',parentId:'ready-parent',title:'可完成的二级事项',status:'doing',order:0},
@@ -591,8 +711,69 @@ try {
   await panesPage.locator('[data-save-status][data-state="saved"]').waitFor({state:'attached'});
   const pane = status => panesPage.locator(`.column.${status} .column-items`);
   const attention = () => panesPage.locator('.pending-attention').evaluateAll(elements => elements.map(element => element.dataset.task));
-  const panePositions = () => panesPage.evaluate(() => Object.fromEntries([...document.querySelectorAll('.column-items')].map(element => [element.parentElement.dataset.column,element.scrollTop]).concat([['overview',document.querySelector('.overview').scrollTop]])));
-  await panesPage.locator('.overview').evaluate(element => {element.scrollTop=100;});
+  const panePositions = () => panesPage.evaluate(() => Object.fromEntries([...document.querySelectorAll('.column-items')].map(element => [element.parentElement.dataset.column,element.scrollTop]).concat([['overview',document.querySelector('.overview-content').scrollTop]])));
+  const overviewHeaderTop = await panesPage.locator('.overview-header').evaluate(element => element.getBoundingClientRect().top);
+  const beforeOverviewWheel = await panePositions();
+  const firstParagraphTop = await panesPage.locator('.overview-content p').first().evaluate(element => element.getBoundingClientRect().top);
+  await panesPage.locator('.overview-content').hover();await panesPage.mouse.wheel(0,360);
+  await panesPage.waitForFunction(top => Math.abs(document.querySelector('.overview-content').scrollTop-top-360) < 1,beforeOverviewWheel.overview);
+  assert.equal(await panesPage.locator('.overview-header').evaluate(element => element.getBoundingClientRect().top),overviewHeaderTop);
+  assert.equal(await panesPage.locator('.overview').evaluate(element => element.scrollTop),0);
+  assert.ok(Math.abs(await panesPage.locator('.overview-content p').first().evaluate(element => element.getBoundingClientRect().top)-firstParagraphTop+360) < 1);
+  for (const status of ['todo','doing','done']) assert.equal((await panePositions())[status],beforeOverviewWheel[status]);
+  passed('长总体情况只滚动正文，标题及完成度固定，三列事项不随之滚动');
+  await panesPage.locator('.overview-content').evaluate(element => {element.scrollTop=400;});
+  const clickedSummaryPoint = await clickSummaryText(panesPage,'.overview-content p','总体情况第 30 段');
+  const summaryEditor = panesPage.locator('[data-inline-editor="summary"]');
+  await summaryEditor.waitFor();
+  const clickedSummaryLine = await summaryEditor.evaluate(element => {
+    const cursor=element.selectionStart,start=element.value.lastIndexOf('\n',cursor-1)+1,end=element.value.indexOf('\n',cursor);
+    const lineTop=element.getBoundingClientRect().top+element.value.slice(0,start).split('\n').length*parseFloat(getComputedStyle(element).lineHeight);
+    return {text:element.value.slice(start,end < 0 ? undefined : end),lineTop};
+  });
+  assert.equal(clickedSummaryLine.text,'总体情况第 30 段。');
+  assert.ok(Math.abs(clickedSummaryLine.lineTop-clickedSummaryPoint.y) < 36,JSON.stringify({clickedSummaryLine,clickedSummaryPoint}));
+  await summaryEditor.evaluate(element => {
+    const cursor=element.value.indexOf('总体情况第 30 段'), pane=element.closest('.overview-content');
+    element.setSelectionRange(cursor,cursor);
+    const lines=element.value.slice(0,cursor).split('\n').length-1;
+    pane.scrollTop += element.getBoundingClientRect().top-pane.getBoundingClientRect().top+lines*parseFloat(getComputedStyle(element).lineHeight)-pane.clientHeight/2;
+  });
+  const beforeSummaryTyping = (await panePositions()).overview;
+  assert.ok(beforeSummaryTyping > 500);
+  await panesPage.keyboard.insertText('修改');
+  assert.ok(Math.abs((await panePositions()).overview-beforeSummaryTyping) < 1);
+  await summaryEditor.press('Backspace');
+  assert.ok(Math.abs((await panePositions()).overview-beforeSummaryTyping) < 1);
+  await panesPage.waitForFunction(async () => (await (await fetch('/api/state')).json()).state.projects[0].summary.includes('修总体情况第 30 段'));
+  assert.ok(Math.abs((await panePositions()).overview-beforeSummaryTyping) < 1);
+  await summaryEditor.press('Control+Enter');
+  await panesPage.locator('[data-save-status][data-state="saved"]').waitFor({state:'attached'});
+  assert.equal(await panesPage.locator('.overview-header').evaluate(element => element.getBoundingClientRect().top),overviewHeaderTop);
+  passed('长总体情况进入编辑、连续输入、删除和自动保存均保持当前滚动位置');
+  await panesPage.locator('.overview-content').evaluate(element => {element.scrollTop=100;});
+  for (const parentId of ['focus-parent','focus-second']) {
+    const add = panesPage.locator(`.column.doing .task-card[data-task="${parentId}"] [data-action="add-task"]`);
+    await add.evaluate(element => element.scrollIntoView({block:'center',inline:'nearest'}));
+    await pane('todo').evaluate(element => {element.scrollTop=0;});
+    const beforeAdd = await panePositions(), beforeAddState = await (await fetch(`${origin}/api/state`)).json();
+    await add.click();
+    const draftEditor = panesPage.locator('.column.todo [data-inline-editor="task"]');
+    await draftEditor.waitFor();
+    await draftEditor.fill('立即输入');await draftEditor.fill('');
+    await panesPage.waitForFunction(() => {
+      const input=document.querySelector('.column.todo [data-inline-editor="task"]'), card=input.closest('.task-card'), pane=card.closest('.column-items');
+      return Math.abs(card.getBoundingClientRect().top-pane.getBoundingClientRect().top) <= 2;
+    });
+    assert.equal(await draftEditor.evaluate(element => element === document.activeElement),true);
+    const afterAdd = await panePositions();
+    assert.ok(afterAdd.todo > 1000);
+    for (const other of ['doing','done','overview']) assert.equal(afterAdd[other],beforeAdd[other]);
+    assert.deepEqual(await (await fetch(`${origin}/api/state`)).json(),beforeAddState);
+    await draftEditor.press('Escape');
+  }
+  passed('进行中一级或二级事项新增子事项时，待办列自动定位到新增编辑框并保持焦点，其他区域及已保存数据不变');
+  for (const status of ['todo','doing','done']) await pane(status).evaluate(element => {element.scrollTop=0;});
   for (const status of ['todo','doing','done']) {
     const view = await pane(status).evaluate(element => ({content:element.scrollHeight,viewport:element.clientHeight}));
     assert.ok(view.content > view.viewport*2);
@@ -628,6 +809,55 @@ try {
   assert.deepEqual(await (await fetch(`${origin}/api/state`)).json(),beforeEdge);
   passed('拖动到列边缘只自动滚动该列，取消拖动后数据保持不变');
 
+  const located = () => panesPage.locator('.pending-attention').evaluateAll(elements => elements.map(element => ({id:element.dataset.task,column:element.dataset.columnStatus})));
+  const locate = (status,id) => panesPage.locator(`.column.${status} .task-card[data-task="${id}"] [data-action="locate-task"]`);
+  const waitAtTop = (status,id) => panesPage.waitForFunction(({status,id}) => {
+    const card=document.querySelector(`.column.${status} .task-card[data-task="${id}"]`), pane=card.closest('.column-items');
+    const a=card.getBoundingClientRect(), b=pane.getBoundingClientRect();
+    return Math.abs(a.top-b.top) <= 2;
+  },{status,id});
+  assert.equal(await panesPage.locator('.task-card[data-task="focus-first"] [data-action="locate-task"]').count(),0);
+  assert.equal(await panesPage.locator('.task-card[data-task="focus-parent"] [data-action="locate-task"]').count(),3);
+  assert.equal(await panesPage.locator('.task-card[data-task="focus-second"] [data-action="locate-task"]').count(),3);
+  const beforeLocate = await (await fetch(`${origin}/api/state`)).json();
+  await locate('doing','focus-parent').evaluate(element => element.scrollIntoView({block:'center',inline:'nearest'}));
+  for (const status of ['todo','done']) await pane(status).evaluate(element => {element.scrollTop=0;});
+  const beforeLocatePositions = await panePositions();
+  await locate('doing','focus-parent').click();
+  assert.deepEqual(await located(),[{id:'focus-parent',column:'todo'},{id:'focus-parent',column:'done'}]);
+  await Promise.all(['todo','done'].map(status => waitAtTop(status,'focus-parent')));
+  const afterLocatePositions = await panePositions();
+  for (const status of ['todo','done']) assert.ok(afterLocatePositions[status] > 1000);
+  for (const status of ['doing','overview']) assert.equal(afterLocatePositions[status],beforeLocatePositions[status]);
+  assert.deepEqual(await (await fetch(`${origin}/api/state`)).json(),beforeLocate);
+  await panesPage.waitForFunction(() => document.querySelector('.pending-attention')?.getAnimations()[0]?.startTime != null);
+  const locatePulse = await panesPage.locator('.pending-attention').first().evaluate(element => element.getAnimations()[0].startTime);
+  await locate('doing','focus-parent').click();
+  await panesPage.waitForFunction(first => document.querySelector('.pending-attention')?.getAnimations()[0]?.startTime > first,locatePulse);
+  await panesPage.waitForFunction(() => !document.querySelector('.pending-attention'),null,{timeout:4000});
+  passed('一级定位按钮将其他两列同一事项对齐列顶端并闪烁，源列与总体情况不动，重复点击重启且不修改数据');
+
+  await panesPage.emulateMedia({reducedMotion:'reduce'});
+  await locate('todo','focus-second').evaluate(element => element.scrollIntoView({block:'center',inline:'nearest'}));
+  for (const status of ['doing','done']) await pane(status).evaluate(element => {element.scrollTop=0;});
+  const beforeContextLocate = await panePositions();
+  await locate('todo','focus-second').click();
+  assert.deepEqual(await located(),[{id:'focus-second',column:'doing'},{id:'focus-second',column:'done'}]);
+  await Promise.all(['doing','done'].map(status => waitAtTop(status,'focus-second')));
+  assert.equal(await panesPage.locator('.pending-attention').first().evaluate(element => getComputedStyle(element).animationName),'none');
+  const afterContextLocate = await panePositions();
+  for (const status of ['doing','done']) assert.ok(afterContextLocate[status] > 1000);
+  for (const status of ['todo','overview']) assert.equal(afterContextLocate[status],beforeContextLocate[status]);
+  assert.deepEqual(await (await fetch(`${origin}/api/state`)).json(),beforeLocate);
+  await locate('todo','focus-parent').focus();
+  await locate('todo','focus-second').hover();
+  await panesPage.screenshot({path:path.resolve('test-results/feature-locate.png')});
+  await locate('doing','doing-fill-2').click();
+  assert.deepEqual(await located(),[]);
+  assert.deepEqual(await (await fetch(`${origin}/api/state`)).json(),beforeLocate);
+  await panesPage.emulateMedia({reducedMotion:'no-preference'});
+  passed('二级虚线事项也能定位，减少动态效果时静态高亮，其他列无同一事项时不改变数据');
+
   await pane('todo').evaluate(element => {element.scrollTop=0;});
   await panesPage.locator('.column.doing .task-card[data-task="focus-parent"] [data-action="complete"]').evaluate(element => element.scrollIntoView({block:'center',inline:'nearest'}));
   const beforeFocus = await (await fetch(`${origin}/api/state`)).json();
@@ -635,10 +865,7 @@ try {
   await panesPage.locator('.column.doing .task-card[data-task="focus-parent"] [data-action="complete"]').click();
   assert.deepEqual(await attention(),['focus-first','focus-next','focus-direct']);
   assert.equal(await panesPage.locator('.pending-attention.context').count(),0);
-  await panesPage.waitForFunction(() => {
-    const card=document.querySelector('.column.todo .task-card[data-task="focus-first"]'), region=card.closest('.column-items'), a=card.getBoundingClientRect(), b=region.getBoundingClientRect();
-    return a.top >= b.top && a.bottom <= b.bottom;
-  });
+  await waitAtTop('todo','focus-first');
   const focusedPositions = await panePositions();
   assert.ok(focusedPositions.todo > 1000);
   for (const status of ['doing','done','overview']) assert.equal(focusedPositions[status],beforeFocusPositions[status]);
@@ -657,6 +884,7 @@ try {
   await pane('todo').evaluate(element => {element.scrollTop=0;});
   await panesPage.locator('.column.doing .task-card[data-task="focus-second"] [data-action="complete"]').click();
   assert.deepEqual(await attention(),['focus-first','focus-next']);
+  await waitAtTop('todo','focus-first');
   assert.equal(await panesPage.locator('.pending-attention').first().evaluate(element => getComputedStyle(element).animationName),'none');
   assert.deepEqual(await (await fetch(`${origin}/api/state`)).json(),beforeFocus);
   passed('二级事项只定位自己的待办子事项，减少动态效果模式使用静态高亮');
@@ -667,8 +895,64 @@ try {
   await panesPage.locator('.column.doing .task-card[data-task="ready-parent"] [data-action="complete"]').click();
   await panesPage.locator('[data-save-status][data-state="saved"]').waitFor({state:'attached'});
   for (const id of ['ready-parent','ready-child','ready-leaf']) assert.equal((await snapshot()).projects[0].tasks.find(task => task.id === id).status,'done');
-  assert.deepEqual(errors,[]);await panesPage.close();
   passed('无待办后代的普通事项和完整分支仍能正常完成');
+  const shortFixture = await (await fetch(`${origin}/api/state`)).json();
+  shortFixture.state.projects = [{id:'short-columns',name:'短列顶端定位检查',summary:'保持总体情况不动',createdAt,archivedAt:null,tasks:[
+    {id:'short-first',parentId:null,title:'首个父事项',status:'doing',order:0},
+    {id:'short-first-todo',parentId:'short-first',title:'首个待办子事项',status:'todo',order:0},
+    {id:'short-first-done',parentId:'short-first',title:'首个已完成子事项',status:'done',order:1},
+    {id:'short-last',parentId:null,title:'末尾父事项',status:'doing',order:1},
+    {id:'short-last-todo',parentId:'short-last',title:'末尾待办子事项',status:'todo',order:0},
+    {id:'short-last-done',parentId:'short-last',title:'末尾已完成子事项',status:'done',order:1},
+  ]}];
+  assert.equal((await fetch(`${origin}/api/state`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(shortFixture)})).status,200);
+  await panesPage.reload();
+  await panesPage.locator('[data-save-status][data-state="saved"]').waitFor({state:'attached'});
+  const beforeShortLocate = await (await fetch(`${origin}/api/state`)).json();
+  assert.ok(await pane('todo').evaluate(element => element.scrollHeight <= element.clientHeight+1));
+  const shortSpacing = new Map();
+  for (const id of ['short-first','short-last','short-first','short-last']) {
+    const before = await panePositions();
+    await locate('doing',id).click();
+    await Promise.all(['todo','done'].map(status => waitAtTop(status,id)));
+    assert.deepEqual(await located(),[{id,column:'todo'},{id,column:'done'}]);
+    const after = await panePositions();
+    for (const status of ['doing','overview']) assert.equal(after[status],before[status]);
+    const spacing = await panesPage.locator('.column.todo .column-items,.column.done .column-items').evaluateAll(elements => elements.map(element => [element.scrollHeight,element.scrollTop]));
+    if (shortSpacing.has(id)) assert.deepEqual(spacing,shortSpacing.get(id));
+    else shortSpacing.set(id,spacing);
+    assert.deepEqual(await (await fetch(`${origin}/api/state`)).json(),beforeShortLocate);
+  }
+  await panesPage.locator('.column.doing .task-card[data-task="short-first"] [data-action="complete"]').click();
+  await waitAtTop('todo','short-first-todo');
+  assert.deepEqual(await attention(),['short-first-todo']);
+  assert.deepEqual(await (await fetch(`${origin}/api/state`)).json(),beforeShortLocate);
+  const layoutFixture = await (await fetch(`${origin}/api/state`)).json();
+  layoutFixture.state.projects = [{id:'card-layout',name:'事项布局检查',summary:'',createdAt,archivedAt:null,tasks:[
+    ...['todo','doing','done'].map((status,order) => ({id:`layout-${status}`,parentId:null,title:'第一行\n\n第二行\n\n第三行',status,order})),
+    {id:'layout-child',parentId:'layout-doing',title:'二级事项\n\n第二行',status:'todo',order:0},
+  ]}];
+  assert.equal((await fetch(`${origin}/api/state`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(layoutFixture)})).status,200);
+  await panesPage.reload();await panesPage.locator('[data-save-status][data-state="saved"]').waitFor({state:'attached'});
+  await panesPage.mouse.move(0,0);
+  const layout = await panesPage.locator('.task-card').evaluateAll(cards => cards.map(card => {
+    const rect=card.getBoundingClientRect(), root=card.parentElement.parentElement.classList.contains('column-items');
+    return {root,border:getComputedStyle(card).borderTopWidth,color:getComputedStyle(card).borderTopColor,offsets:[...card.querySelectorAll('button,.drag-handle')].map(button => {
+      const bounds=button.getBoundingClientRect();return bounds.top+bounds.height/2-rect.top-rect.height/2;
+    })};
+  }));
+  assert.ok(layout.some(card => card.root) && layout.some(card => !card.root));
+  for (const card of layout) {
+    assert.equal(card.border,card.root ? '2px' : '1px');
+    if (card.root) assert.equal(card.color,'rgb(189, 203, 177)');
+    assert.ok(card.offsets.every(offset => Math.abs(offset) < 1),JSON.stringify(card));
+  }
+  await panesPage.locator('.column.todo .task-card[data-task="layout-todo"]').hover();
+  assert.deepEqual(await panesPage.locator('.column.todo .task-card[data-task="layout-todo"]').evaluate(element => [getComputedStyle(element).borderTopWidth,getComputedStyle(element).borderTopColor]),['2px','rgb(189, 203, 177)']);
+  await panesPage.screenshot({path:path.resolve('test-results/task-card-layout.png')});
+  passed('一级事项及虚线框边框加粗，多行事项内的操作按钮、完成框和拖动把手均上下居中');
+  assert.deepEqual(errors,[]);await panesPage.close();
+  passed('短列首尾事项及完成检查均对齐列顶端，重复定位不累积空白，源列和总体情况及数据版本保持不变');
   console.log(`UI smoke: ${checks} checks passed`);
 } finally {
   await browser.close();
