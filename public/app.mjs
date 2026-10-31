@@ -1,4 +1,4 @@
-import {validateState, depthOf, descendants, moveTask, setTaskStatus, removeTask, progress, canArchive, projectColumn} from './model.mjs';
+import {validateState, depthOf, descendants, moveTask, moveProject, setTaskStatus, removeTask, progress, canArchive, projectColumn} from './model.mjs';
 import {workspaceRequest, installNativeCloseGuard, installNativeDownloadFeedback} from './transport.mjs';
 
 const icons = {
@@ -172,12 +172,13 @@ function taskHTML(node, project, status) {
 
 function projectHTML(project) {
   const id = escape(project.id);
-  if (activeId !== project.id) return `<section class="project collapsed" id="project-${id}"><button class="project-toggle" data-action="toggle" data-project="${id}" aria-expanded="false" title="${escape(project.name)}">${icon('chevron')}<span class="project-title">${escape(project.name)}</span></button></section>`;
+  const handle = activeId === null ? `<button type="button" class="icon-button project-sort-handle" data-project="${id}" aria-label="排序项目：${escape(project.name)}" title="拖动排序；←/→调整项目顺序">${icon('grip')}</button>` : '';
+  if (activeId !== project.id) return `<section class="project collapsed" id="project-${id}" data-project="${id}">${handle}<button class="project-toggle" data-action="toggle" data-project="${id}" aria-expanded="false" title="${escape(project.name)}">${icon('chevron')}<span class="project-title">${escape(project.name)}</span></button></section>`;
   const stats = progress(project);
   const draft = editing?.newTask && editing.projectId === project.id ? editing.newTask : null;
   const before = draft && project.tasks.find(task => task.id === editing.beforeId);
   const display = draft ? {...project,tasks:[...project.tasks,{...draft,order:before ? before.order - 0.5 : draft.order}]} : project;
-  return `<section class="project expanded" id="project-${id}">
+  return `<section class="project expanded" id="project-${id}" data-project="${id}">
     <header class="project-header">${actionButton('toggle','收起项目','down',`data-project="${id}" aria-expanded="true"`)}${editable('name',project,project.name)}<div class="project-tools">${project.archivedAt ? `<button class="plain-button" data-action="restore" data-project="${id}">${icon('undo')} 恢复项目</button>` : actionButton('archive','归档','archive',`data-project="${id}"`)}${actionButton('delete-project','删除项目','trash',`data-project="${id}"`)}</div></header>
     <div class="project-body"><section class="overview"><div class="overview-header"><h2>总体情况</h2><span class="progress-value" aria-label="完成度">${stats.percent}%</span></div>${editable('summary',project,project.summary)}</section>
     <div class="board" data-board="${id}">${Object.entries(statuses).map(([status,label]) => `<section class="column ${status}" data-column="${status}" data-project="${id}" aria-label="${label}"><h2 class="column-heading"><span class="status-dot"></span>${label}</h2><div class="column-items" tabindex="0" role="region" aria-label="${label}列表">${projectColumn(display,status).map(node => taskHTML(node,display,status)).join('')}${!project.archivedAt && status === 'todo' ? `<button class="add-task" data-action="add-task" data-project="${id}" aria-label="新增待办" title="新增待办">${icon('plus')}</button>` : ''}</div></section>`).join('')}</div></div>
@@ -347,7 +348,7 @@ function closeDialog() {dialog.close();dialog.innerHTML = '';}
 function showHelp() {
   dialog.innerHTML = `<header class="dialog-header"><h2>帮助</h2>${actionButton('close','关闭','close')}</header><div class="help-content">
     <h3>软件说明</h3><p>每次展开一个项目。点击项目名、总体情况或事项正文直接编辑，离开编辑区后自动保存并渲染。正文支持 Markdown，行内公式用 <code>$...$</code>，独立公式用 <code>$$...$$</code>。</p>
-    <p>事项最多三级，状态依次为待办项 ↔ 进行中 ↔ 已完成。使用条目按钮切换状态；左侧把手可调整同列顺序与层级，拖动父事项会携带全部子事项。</p>
+    <p>事项最多三级，状态依次为待办项 ↔ 进行中 ↔ 已完成。使用条目按钮切换状态；左侧把手可调整同列顺序与层级，拖动父事项会携带全部子事项。全部项目折叠后，在项目栏上方悬停显示排序把手，可左右拖动排序。</p>
     <p>一级、二级事项的定位按钮可滚动并高亮其他列中的同一事项，包括虚线条目。总体情况中，分点后的普通行顶格书写即可退出列表；缩进书写仍作为列表内容。</p>
     <p>全部事项完成后可归档。归档、删除均需确认；下载按钮可导出全部项目备份。</p>
     <h3>快捷键</h3><table><tbody>
@@ -359,6 +360,7 @@ function showHelp() {
       <tr><th scope="row"><kbd>Ctrl + Enter</kbd></th><td>结束编辑并渲染</td></tr>
       <tr><th scope="row"><kbd>Esc</kbd></th><td>结束编辑、取消拖动或关闭弹框</td></tr>
       <tr><th scope="row"><kbd>↑ / ↓</kbd></th><td>先点击事项左侧六点图标，再按上下键排序</td></tr>
+      <tr><th scope="row"><kbd>← / →</kbd></th><td>聚焦项目排序把手后，左右调整项目顺序</td></tr>
       <tr><th scope="row"><kbd>Enter / 空格</kbd></th><td>点击左侧六点图标后，进入正文编辑</td></tr>
     </tbody></table><p>同级指同一列、同一父事项下的条目。只有一个同级条目，或已到首尾时，对应方向不会继续移动。</p></div><footer class="dialog-footer"><button class="primary" data-action="close">关闭</button></footer>`;
   dialog.showModal();
@@ -478,6 +480,16 @@ document.addEventListener('focusout',event => {
 document.addEventListener('keydown',event => {
   if (event.isComposing || event.keyCode === 229) return;
   if (event.key === 'Escape' && dragged) {event.preventDefault();clearDrag();return;}
+  const projectHandle = event.target.closest('.project-sort-handle');
+  if (projectHandle && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+    event.preventDefault();
+    if (activeId !== null) return;
+    if (finishEditor() === false) return;
+    const projects = visibleProjects(), id = projectHandle.dataset.project, index = projects.findIndex(project => project.id === id);
+    if (event.key === 'ArrowLeft' && index === 0 || event.key === 'ArrowRight' && index === projects.length-1) return;
+    change(() => moveProject(state,id,event.key === 'ArrowLeft' ? projects[index-1].id : projects[index+2]?.id));
+    document.getElementById(`project-${id}`).querySelector('.project-sort-handle').focus({preventScroll:true});return;
+  }
   const handle = event.target.closest('.drag-handle');
   if (handle) {
     const card = handle.closest('.task-card'), project = projectById(card.dataset.project), task = project.tasks.find(task => task.id === card.dataset.task);
@@ -526,18 +538,26 @@ document.addEventListener('keydown',event => {
   } else if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('[role="button"][data-action]')) {event.preventDefault();handleAction(event.target);}
 });
 function clearDropIndicators() {
-  app.querySelectorAll('.drag-over,.drop-before,.drop-after,.over').forEach(element => element.classList.remove('drag-over','drop-before','drop-after','over'));
+  app.querySelectorAll('.drag-over,.drop-before,.drop-after,.over,.project-drop-before,.project-drop-after').forEach(element => element.classList.remove('drag-over','drop-before','drop-after','over','project-drop-before','project-drop-after'));
 }
 function clearDrag() {
   const previous = dragged;dragged = null;
   if (previous?.frame) cancelAnimationFrame(previous.frame);
   if (previous?.handle.hasPointerCapture(previous.pointerId)) previous.handle.releasePointerCapture(previous.pointerId);
-  app.classList.remove('is-dragging');
+  app.classList.remove('is-dragging','is-project-dragging');
   app.querySelectorAll('.dragging,.drag-blocked').forEach(element => element.classList.remove('dragging','drag-blocked'));
   clearDropIndicators();
 }
 function dragTarget(x,y) {
   const target = document.elementFromPoint(x,y);
+  if (dragged?.kind === 'project') {
+    if (activeId !== null) return null;
+    const project = target?.closest('.project');
+    if (!project || project.dataset.project === dragged.id) return null;
+    const projects = visibleProjects(), index = projects.findIndex(item => item.id === project.dataset.project);
+    const rect = project.getBoundingClientRect(), before = x < rect.left+rect.width/2;
+    return {element:project,kind:before ? 'project-drop-before' : 'project-drop-after',options:{beforeId:before ? projects[index].id : projects[index+1]?.id}};
+  }
   const column = target?.closest('[data-column]');
   if (!dragged || column?.dataset.project !== dragged.projectId || column.dataset.column !== dragged.status) return null;
   const group = target.closest('[data-task-group]');
@@ -559,23 +579,32 @@ function updateDragTarget() {
 }
 function scrollDrag() {
   if (!dragged?.active) return;
-  const body = dragged.handle.closest('.column-items'), rect = body.getBoundingClientRect();
-  if (dragged.x >= rect.left && dragged.x <= rect.right) body.scrollTop += dragged.y < rect.top+28 ? -12 : dragged.y > rect.bottom-28 ? 12 : 0;
+  if (dragged.kind !== 'project') {
+    const body = dragged.handle.closest('.column-items'), rect = body.getBoundingClientRect();
+    if (dragged.x >= rect.left && dragged.x <= rect.right) body.scrollTop += dragged.y < rect.top+28 ? -12 : dragged.y > rect.bottom-28 ? 12 : 0;
+  }
   const projects = app.querySelector('.projects'), bounds = projects.getBoundingClientRect();
   projects.scrollLeft += dragged.x < bounds.left+24 ? -12 : dragged.x > bounds.right-24 ? 12 : 0;
   updateDragTarget();dragged.frame = requestAnimationFrame(scrollDrag);
 }
 document.addEventListener('pointerdown',event => {
   editorPointerId = event.target.closest('[data-inline-editor]') ? event.pointerId : null;
-  const handle = event.target.closest('.drag-handle');
+  const handle = event.target.closest('.drag-handle,.project-sort-handle');
   if (!handle || event.button !== 0 || !event.isPrimary || dialog.open || conflict) return;
-  event.preventDefault();
-  if (finishEditor() === false || !handle.isConnected) return;
-  handle.focus({preventScroll:true});
-  const card = handle.closest('.task-card');
-  const blockedIds = new Set([card.dataset.task,...descendants(projectById(card.dataset.project),card.dataset.task).map(task => task.id)]);
-  dragged = {id:card.dataset.task,projectId:card.dataset.project,status:card.dataset.columnStatus,blockedIds,handle,pointerId:event.pointerId,x:event.clientX,y:event.clientY,startX:event.clientX,startY:event.clientY,active:false};
-  app.querySelectorAll('.task-card').forEach(element => {if (blockedIds.has(element.dataset.task)) element.classList.add('drag-blocked');});
+  const projectSort = handle.matches('.project-sort-handle');
+  if (projectSort && activeId !== null) return;
+  if (!projectSort) event.preventDefault();
+  if (finishEditor() === false || !handle.isConnected) {event.preventDefault();return;}
+  if (!projectSort) handle.focus({preventScroll:true});
+  dragged = {handle,pointerId:event.pointerId,x:event.clientX,y:event.clientY,startX:event.clientX,startY:event.clientY,active:false};
+  if (projectSort) {
+    Object.assign(dragged,{kind:'project',id:handle.dataset.project});
+  } else {
+    const card = handle.closest('.task-card');
+    const blockedIds = new Set([card.dataset.task,...descendants(projectById(card.dataset.project),card.dataset.task).map(task => task.id)]);
+    Object.assign(dragged,{id:card.dataset.task,projectId:card.dataset.project,status:card.dataset.columnStatus,blockedIds});
+    app.querySelectorAll('.task-card').forEach(element => {if (blockedIds.has(element.dataset.task)) element.classList.add('drag-blocked');});
+  }
   handle.setPointerCapture(event.pointerId);
 });
 document.addEventListener('pointermove',event => {
@@ -584,18 +613,18 @@ document.addEventListener('pointermove',event => {
   if (!dragged.active && Math.hypot(dragged.x-dragged.startX,dragged.y-dragged.startY) < 5) return;
   event.preventDefault();
   if (!dragged.active) {
-    dragged.active = true;dragged.handle.closest('.task-card').classList.add('dragging');app.classList.add('is-dragging');scrollDrag();
+    dragged.active = true;dragged.handle.closest(dragged.kind === 'project' ? '.project' : '.task-card').classList.add('dragging');app.classList.add(dragged.kind === 'project' ? 'is-project-dragging' : 'is-dragging');scrollDrag();
   }
   updateDragTarget();
 });
 document.addEventListener('pointerup',event => {
   if (!dragged || event.pointerId !== dragged.pointerId) return;
-  const {id,projectId,active} = dragged;
+  const {kind,id,projectId,active} = dragged;
   const target = active ? dragTarget(event.clientX,event.clientY) : null;
   clearDrag();
   if (!active) return;
   event.preventDefault();ignoreDragClick = true;setTimeout(() => {ignoreDragClick = false;},0);
-  if (target) change(() => moveTask(projectById(projectId),id,target.options));
+  if (target) change(() => kind === 'project' ? moveProject(state,id,target.options.beforeId) : moveTask(projectById(projectId),id,target.options));
 });
 for (const name of ['pointercancel','lostpointercapture']) document.addEventListener(name,event => {if (event.pointerId === dragged?.pointerId) clearDrag();});
 window.addEventListener('blur',clearDrag);

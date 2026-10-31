@@ -2,6 +2,7 @@
   "name": "quiet-todo-desktop",
   "version": "1.0.0",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "description": "本地优先的三级事项桌面工作台",
   "engines": {

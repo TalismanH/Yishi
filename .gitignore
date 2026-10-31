@@ -4,3 +4,4 @@ test-results/
 *.log
 src-tauri/target/
 src-tauri/gen/schemas/
+.omx/

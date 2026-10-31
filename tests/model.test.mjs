@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createInitialState, validateState, descendants, depthOf, moveTask, setTaskStatus, removeTask, progress, canArchive, projectColumn } from '../public/model.mjs';
+import { createInitialState, validateState, descendants, depthOf, moveTask, moveProject, setTaskStatus, removeTask, progress, canArchive, projectColumn } from '../public/model.mjs';
 
 function fixture() {
   return { id: 'p', name: '项目', summary: '', createdAt: '2026-01-01T00:00:00Z', archivedAt: null,
@@ -18,6 +18,34 @@ test('seed is valid and demonstrates three hierarchy levels', () => {
   assert.equal(validateState(state), state);
   assert.equal(state.projects.length, 3);
   assert.equal(depthOf(state.projects[0], 'drag'), 3);
+});
+
+test('project sorting preserves complete projects and hidden view positions', () => {
+  const state = createInitialState(), original = structuredClone(state);
+  const archived = {...structuredClone(state.projects[0]),id:'archived',archivedAt:'2026-01-01T00:00:00Z'};
+  state.projects.splice(1,0,archived);
+  moveProject(state,'life','workspace');
+  assert.deepEqual(state.projects.map(project => project.id),['life','archived','workspace','learning']);
+  assert.equal(state.projects[1],archived);
+  for (const project of original.projects) assert.deepEqual(state.projects.find(item => item.id === project.id),project);
+  moveProject(state,'life');
+  assert.deepEqual(state.projects.map(project => project.id),['workspace','archived','learning','life']);
+  const another = {...archived,id:'another'};
+  state.projects.push(another);
+  moveProject(state,'another','archived');
+  assert.deepEqual(state.projects.map(project => project.id),['workspace','another','learning','life','archived']);
+  assert.equal(validateState(state),state);
+});
+
+test('invalid project sorting is atomic and sorting before itself is a no-op', () => {
+  const state = createInitialState();
+  state.projects[1].archivedAt = '2026-01-01T00:00:00Z';
+  const before = structuredClone(state);
+  for (const operation of [() => moveProject(state,'missing'),() => moveProject(state,'workspace','missing'),() => moveProject(state,'workspace','learning')]) {
+    assert.throws(operation);assert.deepEqual(state,before);
+  }
+  moveProject(state,'workspace','workspace');
+  assert.deepEqual(state,before);
 });
 
 test('moving a root reorders siblings and preserves every descendant status', () => {

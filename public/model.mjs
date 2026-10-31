@@ -77,6 +77,19 @@ export function validateState(state) {
   return state;
 }
 
+export function moveProject(state, id, beforeId = null) {
+  const project = state.projects.find(item => item.id === id);
+  if (!project) throw new Error('项目不存在');
+  if (id === beforeId) return;
+  const sameView = item => Boolean(item.archivedAt) === Boolean(project.archivedAt);
+  const projects = state.projects.filter(item => sameView(item) && item.id !== id);
+  const index = beforeId === null ? projects.length : projects.findIndex(item => item.id === beforeId);
+  if (index < 0) throw new Error('只能在当前项目列表中排序');
+  projects.splice(index,0,project);
+  let next = 0;
+  state.projects = state.projects.map(item => sameView(item) ? projects[next++] : item);
+}
+
 export function setTaskStatus(project, id, status) {
   if (!STATUSES.has(status)) throw new Error('事项状态不正确');
   const branch = [requireTask(project, id), ...descendants(project, id)];
