@@ -28,15 +28,18 @@ let savePromise = Promise.resolve();
 const collapsedBranches = new Map(), collapsedOverviews = new Set();
 const search = {open:false,projectId:null,query:'',scope:'all',taskId:null};
 const fontFamilies = {system:'"Segoe UI","Microsoft YaHei UI",sans-serif',smiley:'"Smiley Sans","Segoe UI","Microsoft YaHei UI",sans-serif'};
-const appearance = {font:'system',size:14};
+const palettes = {default:'默认配色',mist:'莫兰迪 · 雾蓝',rose:'莫兰迪 · 豆沙',sage:'莫兰迪 · 鼠尾草',oat:'莫兰迪 · 燕麦',lavender:'莫兰迪 · 灰紫',clay:'莫兰迪 · 陶土'};
+const appearance = {font:'system',size:14,palette:'default'};
 try {
   const saved = JSON.parse(localStorage.getItem('yishi.appearance') ?? '{}');
   if (saved?.font === 'system' || saved?.font === 'smiley') appearance.font = saved.font;
   if (Number.isInteger(saved?.size) && saved.size >= 12 && saved.size <= 24) appearance.size = saved.size;
+  if (typeof saved?.palette === 'string' && Object.hasOwn(palettes,saved.palette)) appearance.palette = saved.palette;
 } catch {}
 function applyAppearance() {
   const root = document.documentElement;
   root.dataset.font = appearance.font;
+  root.dataset.palette = appearance.palette;
   root.style.setProperty('--ui-font-family',fontFamilies[appearance.font]);
   root.style.setProperty('--ui-font-size',`${appearance.size}px`);
 }
@@ -435,7 +438,7 @@ function rememberedCloseAction() {
 }
 function showSettings() {
   const closeAction = rememberedCloseAction();
-  dialog.innerHTML = `<header class="dialog-header"><h2>设置</h2>${actionButton('close','关闭','close')}</header><div class="settings-content"><label class="setting-row"><span>界面字体</span><select data-setting-font aria-label="界面字体"><option value="system" ${appearance.font === 'system' ? 'selected' : ''}>系统默认</option><option value="smiley" ${appearance.font === 'smiley' ? 'selected' : ''}>得意黑</option></select></label><label class="setting-row"><span>字号</span><select data-setting-size aria-label="字号">${Array.from({length:13},(_,index) => index+12).map(size => `<option value="${size}" ${appearance.size === size ? 'selected' : ''}>${size}px</option>`).join('')}</select></label>${window.__TAURI__ ? `<div class="setting-row"><span>关闭方式</span><div class="setting-close"><span data-close-preference>${closeAction === 'hide' ? '最小化到托盘' : closeAction === 'exit' ? '退出软件' : '每次询问'}</span><button type="button" class="secondary" data-action="reset-close-choice" ${closeAction ? '' : 'disabled'}>重置关闭选择</button></div></div>` : ''}</div><footer class="dialog-footer"><button class="primary" data-action="close">关闭</button></footer>`;
+  dialog.innerHTML = `<header class="dialog-header"><h2>设置</h2>${actionButton('close','关闭','close')}</header><div class="settings-content"><label class="setting-row"><span>颜色配色</span><select data-setting-palette aria-label="颜色配色">${Object.entries(palettes).map(([value,label]) => `<option value="${value}" ${appearance.palette === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="setting-row"><span>界面字体</span><select data-setting-font aria-label="界面字体"><option value="system" ${appearance.font === 'system' ? 'selected' : ''}>系统默认</option><option value="smiley" ${appearance.font === 'smiley' ? 'selected' : ''}>得意黑</option></select></label><label class="setting-row"><span>字号</span><select data-setting-size aria-label="字号">${Array.from({length:13},(_,index) => index+12).map(size => `<option value="${size}" ${appearance.size === size ? 'selected' : ''}>${size}px</option>`).join('')}</select></label>${window.__TAURI__ ? `<div class="setting-row"><span>关闭方式</span><div class="setting-close"><span data-close-preference>${closeAction === 'hide' ? '最小化到托盘' : closeAction === 'exit' ? '退出软件' : '每次询问'}</span><button type="button" class="secondary" data-action="reset-close-choice" ${closeAction ? '' : 'disabled'}>重置关闭选择</button></div></div>` : ''}</div><footer class="dialog-footer"><button class="primary" data-action="close">关闭</button></footer>`;
   dialog.showModal();
 }
 function chooseCloseAction() {
@@ -467,7 +470,7 @@ function showHelp() {
     <p>Ctrl+F 打开当前项目的搜索栏。可按列筛选、查看匹配事项数，用上下按钮或 Enter / Shift+Enter 循环跳转；点击 × 或按 Esc 关闭搜索。</p>
     <h3>文本、备份与关闭</h3>
     <p>正文支持 Markdown 和公式：行内公式用 <code>$...$</code>，独立公式用 <code>$$...$$</code>。总体情况的分点后，顶格普通行退出列表，缩进续行保留在列表内。</p>
-    <p>顶栏下载按钮导出全部项目。设置中可切换字体、调整字号；桌面版记住关闭方式后，也可在设置中重置关闭选择。</p>
+    <p>顶栏下载按钮导出全部项目。设置中可切换配色、字体并调整字号；桌面版记住关闭方式后，也可在设置中重置关闭选择。</p>
     <h3>快捷键</h3><table><tbody>
       <tr><th scope="row"><kbd>Ctrl + B</kbd></th><td>加粗或取消加粗选中文字；无选区时插入加粗标记</td></tr>
       <tr><th scope="row"><kbd>Ctrl + F</kbd></th><td>打开当前项目的事项搜索</td></tr>
@@ -632,9 +635,10 @@ document.addEventListener('compositionend',event => {
   if (event.target.matches('[data-search-query]')) event.target.dispatchEvent(new Event('input',{bubbles:true}));
 });
 document.addEventListener('change',event => {
-  if (event.target.matches('[data-setting-font],[data-setting-size]')) {
+  if (event.target.matches('[data-setting-font],[data-setting-size],[data-setting-palette]')) {
     const value = event.target.value;
     if (event.target.matches('[data-setting-font]')) {if (!Object.hasOwn(fontFamilies,value)) return;appearance.font = value;}
+    else if (event.target.matches('[data-setting-palette]')) {if (!Object.hasOwn(palettes,value)) return;appearance.palette = value;}
     else {const size = Number(value);if (!Number.isInteger(size) || size < 12 || size > 24) return;appearance.size = size;}
     applyAppearance();
     try {localStorage.setItem('yishi.appearance',JSON.stringify(appearance));}

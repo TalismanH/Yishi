@@ -181,6 +181,19 @@ try {
   passed('帮助窗口宽度和快捷键说明在原生 WebView 中正常显示');
   await page.locator('[data-action="settings"]').click();
   assert.equal(await page.locator('dialog [data-action="reset-close-choice"]').count(),1);
+  const palette = page.locator('[data-setting-palette]'), backgrounds = new Set();
+  assert.deepEqual(await palette.locator('option').evaluateAll(options => options.map(option => option.value)),['default','mist','rose','sage','oat','lavender','clay']);
+  for (const value of ['mist','rose','sage','oat','lavender','clay']) {
+    await palette.selectOption(value);
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.palette),value);
+    backgrounds.add(await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor));
+  }
+  assert.equal(backgrounds.size,6);
+  await page.reload();await saved();await page.locator('[data-action="settings"]').click();
+  assert.equal(await palette.inputValue(),'clay');
+  await palette.selectOption('default');
+  assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor),'rgb(233, 237, 228)');
+  passed('发布 EXE 内嵌六套莫兰迪配色，切换即时生效、重载保留选择并可恢复默认配色');
   await page.locator('[data-setting-font]').selectOption('smiley');
   const loadedFonts = await page.evaluate(async () => (await document.fonts.load('18px "Smiley Sans"')).map(face => face.status));
   assert.ok(loadedFonts.length > 0 && loadedFonts.every(status => status === 'loaded'));

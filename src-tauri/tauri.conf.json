@@ -29,6 +29,7 @@
     "targets": ["nsis"],
     "windows": {
       "nsis": {
+        "installerIcon": "icons/icon.ico",
         "languages": ["SimpChinese"]
       }
     },

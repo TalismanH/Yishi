@@ -24,6 +24,8 @@ const snapshot = async () => (await (await fetch(`${origin}/api/state`)).json())
 const appearance = () => page.evaluate(() => localStorage.getItem('yishi.appearance'));
 const font = () => page.locator('[data-setting-font]');
 const size = () => page.locator('[data-setting-size]');
+const palette = () => page.locator('[data-setting-palette]');
+const palettes = ['default','mist','rose','sage','oat','lavender','clay'];
 let checks = 0;
 function passed(message) {checks++;console.log(`✓ ${message}`);}
 async function openSettings() {
@@ -64,6 +66,29 @@ async function expectSmileyLoaded() {
   assert.ok(result.loaded > 0 && result.checked && result.faces.includes('loaded'),JSON.stringify(result));
   assert.ok(smileyResponses.includes(200),JSON.stringify(smileyResponses));
 }
+async function colors() {
+  return page.evaluate(() => {
+    const computed = selector => getComputedStyle(document.querySelector(selector));
+    const root = computed(':root'), card = computed('.task-card:not(.context)'), primary = computed('dialog .primary');
+    const canvas = document.createElement('canvas'), context = canvas.getContext('2d');
+    function luminance(color) {
+      context.fillStyle = color;context.fillRect(0,0,1,1);
+      const channels = [...context.getImageData(0,0,1,1).data].slice(0,3).map(value => {
+        const channel = value/255;
+        return channel <= .04045 ? channel/12.92 : ((channel+.055)/1.055)**2.4;
+      });
+      return channels[0]*.2126+channels[1]*.7152+channels[2]*.0722;
+    }
+    function contrast(first,second) {
+      const a = luminance(first), b = luminance(second);
+      return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);
+    }
+    return {palette:document.documentElement.dataset.palette,page:root.backgroundColor,topbar:computed('.topbar').backgroundColor,
+      project:computed('.project').backgroundColor,card:card.backgroundColor,dialog:computed('dialog').backgroundColor,
+      border:computed('.project').borderTopColor,primary:primary.backgroundColor,
+      textContrast:contrast(card.color,card.backgroundColor),buttonContrast:contrast(primary.color,primary.backgroundColor)};
+  });
+}
 
 try {
   const fixture = await snapshot(), createdAt = new Date().toISOString();
@@ -88,9 +113,36 @@ try {
   assert.equal(await page.locator('[data-close-preference],[data-action="reset-close-choice"]').count(),0);
   passed('顶部设置使用纯图标，默认系统字体和14px，字号仅提供12至24px，浏览器模式不显示原生关闭偏好');
 
+  assert.equal(await palette().getAttribute('aria-label'),'颜色配色');
+  assert.deepEqual(await palette().locator('option').evaluateAll(options => options.map(option => option.value)),palettes);
+  assert.equal(await palette().inputValue(),'default');
+  const defaultColors = await colors(), pageColors = new Set();
+  assert.equal(defaultColors.page,'rgb(233, 237, 228)');
+  assert.equal(defaultColors.card,'rgb(248, 249, 243)');
+  assert.equal(defaultColors.primary,'rgb(53, 101, 75)');
+  for (const selected of palettes.slice(1)) {
+    await palette().selectOption(selected);
+    const actual = await colors();
+    assert.equal(actual.palette,selected);
+    for (const key of ['page','topbar','project','card','dialog','border','primary']) assert.notEqual(actual[key],defaultColors[key],`${selected}: ${key}`);
+    assert.ok(actual.textContrast >= 4.5,`${selected}: text contrast ${actual.textContrast}`);
+    assert.ok(actual.buttonContrast >= 4.5,`${selected}: button contrast ${actual.buttonContrast}`);
+    pageColors.add(actual.page);
+    assert.deepEqual(JSON.parse(await appearance()),{font:'system',size:14,palette:selected});
+    await page.reload();await saved();await expectAppearance('system',14);await openSettings();
+    assert.equal(await palette().inputValue(),selected);assert.deepEqual(await colors(),actual);
+  }
+  assert.equal(pageColors.size,6);
+  await font().selectOption('smiley');await size().selectOption('18');
+  assert.deepEqual(JSON.parse(await appearance()),{font:'smiley',size:18,palette:'clay'});
+  assert.equal((await colors()).palette,'clay');
+  await font().selectOption('system');await size().selectOption('14');await palette().selectOption('default');
+  assert.deepEqual(await colors(),defaultColors);assert.deepEqual(await snapshot(),before);
+  passed('默认配色保持原样，六套配色同步更新全界面且满足文字对比度，重载保留选择，字体字号切换保留配色且不改业务数据');
+
   await font().selectOption('smiley');await size().selectOption('18');
   const changed = await expectAppearance('smiley',18);await expectSmileyLoaded();
-  assert.deepEqual(JSON.parse(await appearance()),{font:'smiley',size:18});
+  assert.deepEqual(JSON.parse(await appearance()),{font:'smiley',size:18,palette:'default'});
   for (const key of ['projectSize','columnSize','buttonSize']) assert.equal(changed[key]-baseline[key],4,key);
   await page.screenshot({path:path.resolve('test-results/settings.png')});
   await closeDialog();
@@ -117,8 +169,12 @@ try {
     const bounds = await page.locator('dialog').boundingBox();
     assert.ok(bounds.x >= 0 && bounds.x+bounds.width <= 761,JSON.stringify(bounds));
   }
+  await page.setViewportSize({width:420,height:900});
+  assert.ok(await page.locator('dialog').evaluate(element => element.scrollWidth <= element.clientWidth));
+  const narrowBounds = await page.locator('dialog').boundingBox();
+  assert.ok(narrowBounds.x >= 0 && narrowBounds.x+narrowBounds.width <= 421,JSON.stringify(narrowBounds));
   await font().selectOption('system');await expectAppearance('system',24);
-  assert.deepEqual(JSON.parse(await appearance()),{font:'system',size:24});
+  assert.deepEqual(JSON.parse(await appearance()),{font:'system',size:24,palette:'default'});
   await closeDialog();assert.deepEqual(await snapshot(),before);
   await page.setViewportSize({width:1440,height:1000});
   passed('字体和字号重载后保持，12px/24px边界及窄窗口布局正常，切回系统字体即刻生效且不修改业务数据');
@@ -130,6 +186,17 @@ try {
   assert.deepEqual(await snapshot(),before);
   passed('非法JSON、未知字体和越界/非整数字号均回退到有效默认值，不影响工作区');
 
+  for (const invalid of ['unknown',null,7,{},['mist']]) {
+    await page.evaluate(value => localStorage.setItem('yishi.appearance',JSON.stringify({font:'smiley',size:18,palette:value})),invalid);
+    await page.reload();await saved();await expectAppearance('smiley',18);await openSettings();
+    assert.equal(await palette().inputValue(),'default');assert.deepEqual(await colors(),defaultColors);await closeDialog();
+  }
+  await page.evaluate(() => localStorage.setItem('yishi.appearance',JSON.stringify({font:'smiley',size:18})));
+  await page.reload();await saved();await expectAppearance('smiley',18);await openSettings();
+  assert.equal(await palette().inputValue(),'default');await palette().selectOption('mist');
+  assert.deepEqual(JSON.parse(await appearance()),{font:'smiley',size:18,palette:'mist'});await closeDialog();
+  passed('无效配色回退默认并保留有效字体字号，旧版外观偏好兼容且可保存新配色');
+
   await page.evaluate(() => localStorage.removeItem('yishi.appearance'));
   await page.reload();await saved();await expectAppearance('system',14);
   const storedBeforeFailure = await appearance();
@@ -140,11 +207,13 @@ try {
       return window.__settingsOriginalSetItem.call(this,key,value);
     };
   });
-  await openSettings();await font().selectOption('smiley');await size().selectOption('20');
+  await openSettings();await font().selectOption('smiley');await size().selectOption('20');await palette().selectOption('rose');
   await expectAppearance('smiley',20);await expectSmileyLoaded();
+  assert.equal((await colors()).palette,'rose');
   assert.equal(await appearance(),storedBeforeFailure);
   await page.evaluate(() => {Storage.prototype.setItem=window.__settingsOriginalSetItem;delete window.__settingsOriginalSetItem;});
   await page.reload();await saved();await expectAppearance('system',14);
+  await openSettings();assert.deepEqual(await colors(),defaultColors);await closeDialog();
   assert.deepEqual(await snapshot(),before);assert.deepEqual(errors,[]);
   passed('localStorage写入异常仍应用本次外观设置，未保存的偏好不会伪装为持久化，所有外观调整均不写业务JSON');
   console.log(`Settings UI: ${checks} checks passed`);
