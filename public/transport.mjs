@@ -36,22 +36,33 @@ export async function installNativeDownloadFeedback(notify, native = globalThis.
   });
 }
 
-export async function installNativeCloseGuard({ persistEditor, isEmptyDraft = () => false, save, isPending, hasError, onError }, native = globalThis.window?.__TAURI__) {
+export async function installNativeCloseGuard({ persistEditor, isEmptyDraft = () => false, save, isPending, hasError, onError, chooseCloseAction }, native = globalThis.window?.__TAURI__) {
   if (!native) return;
   const nativeWindow = native.window.getCurrentWindow();
   let flushing = false;
-  return nativeWindow.onCloseRequested(async event => {
-    event.preventDefault();
+  const close = async (exit = false) => {
     if (flushing) return;
     flushing = true;
     try {
+      const action = exit || !chooseCloseAction ? 'exit' : await chooseCloseAction();
+      if (action !== 'exit' && action !== 'hide') return;
       do {
         if (persistEditor() === false && !isEmptyDraft()) return;
         await save();
         if (hasError() || persistEditor() === false && !isEmptyDraft()) return;
       } while (isPending());
-      await nativeWindow.destroy();
+      if (action === 'hide') await native.core.invoke('hide_to_tray');
+      else await nativeWindow.destroy();
     } catch (error) { onError?.(error); }
     finally { flushing = false; }
+  };
+  const unlistenClose = await nativeWindow.onCloseRequested(event => {
+    event.preventDefault();
+    return close();
   });
+  if (!native.event?.listen) return unlistenClose;
+  try {
+    const unlistenTray = await native.event.listen('tray-exit-requested', () => close(true));
+    return () => { unlistenClose();unlistenTray(); };
+  } catch (error) { unlistenClose();throw error; }
 }

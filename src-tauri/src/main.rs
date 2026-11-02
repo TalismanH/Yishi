@@ -5,7 +5,11 @@ mod storage;
 
 use serde_json::Value;
 use storage::{Saved, Snapshot, Store, StoreError};
-use tauri::{Emitter, Manager};
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Emitter, Manager,
+};
 
 fn local_url(url: &tauri::Url) -> bool {
     (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
@@ -51,6 +55,25 @@ async fn save_workspace(
         .map_err(|_| StoreError::new(500, "本地数据保存任务失败，原文件已保留"))?
 }
 
+#[tauri::command]
+fn hide_to_tray(window: tauri::WebviewWindow) -> Result<(), StoreError> {
+    check_window(&window)?;
+    if window.app_handle().tray_by_id("main-tray").is_none() {
+        return Err(StoreError::new(500, "托盘图标不可用，窗口保持打开"));
+    }
+    window
+        .hide()
+        .map_err(|_| StoreError::new(500, "无法隐藏到托盘，请重试"))
+}
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -79,9 +102,49 @@ fn main() {
                     tauri::webview::NewWindowResponse::Deny
                 })
                 .build()?;
+            let show = MenuItem::with_id(app, "tray-show", "显示主窗口", true, None::<&str>)?;
+            let exit = MenuItem::with_id(app, "tray-exit", "退出软件", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &exit])?;
+            let icon = app
+                .default_window_icon()
+                .cloned()
+                .ok_or_else(|| StoreError::new(500, "缺少托盘图标，无法启用托盘功能"))?;
+            TrayIconBuilder::with_id("main-tray")
+                .icon(icon)
+                .tooltip("一事")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "tray-show" => show_main_window(app),
+                    "tray-exit" => {
+                        // Keep save/conflict checks in the frontend's shared close guard.
+                        show_main_window(app);
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.emit("tray-exit-requested", ());
+                        }
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| match event {
+                    TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    }
+                    | TrayIconEvent::DoubleClick {
+                        button: MouseButton::Left,
+                        ..
+                    } => show_main_window(tray.app_handle()),
+                    _ => {}
+                })
+                .build(app)?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![load_workspace, save_workspace])
+        .invoke_handler(tauri::generate_handler![
+            load_workspace,
+            save_workspace,
+            hide_to_tray
+        ])
         .run(tauri::generate_context!())
         .expect("一事桌面窗口启动失败");
 }

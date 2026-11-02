@@ -8,16 +8,29 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function setup(hooks) {
-  let listener, destroyed = 0;
+async function setup(hooks, {tray = false, hideFailure} = {}) {
+  let listener, trayListener, destroyed = 0, hidden = 0, removed = 0;
   const unlisten = () => {};
-  const native = { window: { getCurrentWindow: () => ({
+  const native = { core: {invoke: async command => {
+    assert.equal(command,'hide_to_tray');
+    if (hideFailure) throw hideFailure;
+    hidden += 1;
+  }}, window: { getCurrentWindow: () => ({
     onCloseRequested: async handler => { listener = handler; return unlisten; },
     destroy: async () => { destroyed += 1; },
   }) } };
-  assert.equal(await installNativeCloseGuard(hooks, native), unlisten);
+  if (tray) native.event = {listen: async (event, handler) => {
+    assert.equal(event,'tray-exit-requested');trayListener = handler;
+    return () => {removed += 1;};
+  }};
+  const dispose = await installNativeCloseGuard(hooks, native);
+  if (!tray) assert.equal(dispose, unlisten);
   return {
     get destroyed() { return destroyed; },
+    get hidden() { return hidden; },
+    get removed() { return removed; },
+    dispose,
+    trayExit() { return trayListener({payload:null}); },
     close() {
       const event = { prevented: false, preventDefault() { this.prevented = true; } };
       return { event, done: listener(event) };
@@ -161,4 +174,72 @@ test('unexpected native close errors preserve the window and reach the existing 
   await guard.close().done;
   assert.equal(guard.destroyed, 0);
   assert.equal(shown, failure);
+});
+
+test('minimize to tray waits for saved content and leaves the window alive', async () => {
+  const write = deferred();
+  let saved = false;
+  const guard = await setup({
+    chooseCloseAction: async () => 'hide', persistEditor: () => true,
+    save: async () => {await write.promise;saved = true;},
+    isPending: () => !saved, hasError: () => false,
+  });
+  const closing = guard.close();
+  assert.equal(closing.event.prevented,true);
+  assert.equal(guard.hidden,0);assert.equal(guard.destroyed,0);
+  write.resolve();await closing.done;
+  assert.equal(saved,true);assert.equal(guard.hidden,1);assert.equal(guard.destroyed,0);
+});
+
+test('canceling the close choice keeps the editor and window untouched', async () => {
+  let persisted = 0, saved = 0;
+  const guard = await setup({
+    chooseCloseAction: async () => 'cancel', persistEditor: () => {persisted += 1;return true;},
+    save: async () => {saved += 1;}, isPending: () => false, hasError: () => false,
+  });
+  await guard.close().done;
+  assert.equal(persisted,0);assert.equal(saved,0);assert.equal(guard.hidden,0);assert.equal(guard.destroyed,0);
+});
+
+test('failed saves or invalid edits never hide the window', async () => {
+  for (const invalid of [false,true]) {
+    const guard = await setup({
+      chooseCloseAction: async () => 'hide', persistEditor: () => !invalid,
+      save: async () => {}, isPending: () => false, hasError: () => !invalid,
+    });
+    await guard.close().done;
+    assert.equal(guard.hidden,0);assert.equal(guard.destroyed,0);
+  }
+});
+
+test('tray failures reach the existing error handler without destroying the window', async () => {
+  const failure = new Error('tray unavailable');let shown;
+  const guard = await setup({
+    chooseCloseAction: async () => 'hide', persistEditor: () => true,
+    save: async () => {}, isPending: () => false, hasError: () => false,
+    onError: error => {shown = error;},
+  },{hideFailure:failure});
+  await guard.close().done;
+  assert.equal(shown,failure);assert.equal(guard.hidden,0);assert.equal(guard.destroyed,0);
+});
+
+test('tray exit bypasses the close choice and still saves before destruction', async () => {
+  let saved = false, choices = 0;
+  const guard = await setup({
+    chooseCloseAction: async () => {choices += 1;return 'hide';}, persistEditor: () => true,
+    save: async () => {saved = true;}, isPending: () => false, hasError: () => false,
+  },{tray:true});
+  await guard.trayExit();
+  assert.equal(choices,0);assert.equal(saved,true);assert.equal(guard.hidden,0);assert.equal(guard.destroyed,1);
+  guard.dispose();assert.equal(guard.removed,1);
+});
+
+test('tray exit retains the window when persistence or saving fails', async () => {
+  for (const invalid of [false,true]) {
+    const guard = await setup({
+      persistEditor: () => !invalid, save: async () => {},
+      isPending: () => false, hasError: () => !invalid,
+    },{tray:true});
+    await guard.trayExit();assert.equal(guard.hidden,0);assert.equal(guard.destroyed,0);
+  }
 });

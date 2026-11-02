@@ -97,6 +97,9 @@ try {
   assert.equal(await page.locator('dialog input,dialog textarea').count(),0);
   const shortcuts = (await page.locator('dialog table').textContent()).replace(/\s/g,'');
   for (const key of ['Ctrl+B','Enter','Shift+Enter','Tab','Shift+Tab','Ctrl+Enter','Esc','↑','↓']) assert.ok(shortcuts.includes(key));
+  assert.ok(!shortcuts.includes('←') && !shortcuts.includes('→'));
+  assert.ok((await page.locator('dialog').boundingBox()).width >= 800);
+  await page.screenshot({path:path.resolve('test-results/help-window.png')});
   assert.match(await page.locator('dialog').textContent(),/Markdown/);
   await page.locator('dialog [data-action="close"]').last().click();
   assert.equal(await page.locator('dialog[open]').count(),0);
@@ -770,9 +773,23 @@ try {
     assert.ok(afterAdd.todo > 1000);
     for (const other of ['doing','done','overview']) assert.equal(afterAdd[other],beforeAdd[other]);
     assert.deepEqual(await (await fetch(`${origin}/api/state`)).json(),beforeAddState);
-    await draftEditor.press('Escape');
+    const insertedId = await draftEditor.evaluate(element => element.closest('.task-card').dataset.task);
+    await draftEditor.fill('连续新增滚动检查');
+    const beforeEnter = await panePositions();
+    await draftEditor.press('Enter');
+    const afterEnter = await panePositions();
+    assert.ok(Math.abs(afterEnter.todo-beforeEnter.todo) < 1,JSON.stringify({beforeEnter,afterEnter}));
+    assert.ok(await draftEditor.evaluate(element => {
+      const card=element.closest('.task-card'), pane=card.closest('.column-items'), a=card.getBoundingClientRect(), b=pane.getBoundingClientRect();
+      return a.top > b.top+20 && a.bottom <= b.bottom+1;
+    }));
+    for (const other of ['doing','done','overview']) assert.equal(afterEnter[other],beforeEnter[other]);
+    await panesPage.locator(`.column.todo .task-card[data-task="${insertedId}"] [data-action="delete-task"]`).click();
+    await panesPage.locator('dialog button[type="submit"]').click();
+    await panesPage.locator('[data-save-status][data-state="saved"]').waitFor({state:'attached'});
+    assert.deepEqual((await (await fetch(`${origin}/api/state`)).json()).state,beforeAddState.state);
   }
-  passed('进行中一级或二级事项新增子事项时，待办列自动定位到新增编辑框并保持焦点，其他区域及已保存数据不变');
+  passed('进行中点击新增会置顶待办编辑框，随后在待办按Enter新增保持可见且不置顶，其他区域不动');
   for (const status of ['todo','doing','done']) await pane(status).evaluate(element => {element.scrollTop=0;});
   for (const status of ['todo','doing','done']) {
     const view = await pane(status).evaluate(element => ({content:element.scrollHeight,viewport:element.clientHeight}));

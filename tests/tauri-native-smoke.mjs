@@ -91,6 +91,9 @@ async function closeNative() {
   await page.evaluate(() => window.__TAURI__.window.getCurrentWindow().close()).catch(error => {
     if (!/Target (?:page|closed)|has been closed/.test(error.message)) throw error;
   });
+  await page.locator('[data-close-choice="exit"]').click().catch(error => {
+    if (!/Target (?:page|closed)|has been closed/.test(error.message)) throw error;
+  });
   await until(() => exited(owned),'Native close did not finish',15000);
   await browser.close().catch(() => {});browser = null;child = null;
 }
