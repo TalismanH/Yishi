@@ -97,6 +97,10 @@ npm run start:web
 
 搜索框中按 `Enter` 跳转下一个匹配，`Shift+Enter` 跳转上一个，也可使用上下定位按钮；到达首尾后循环。跳转时自动展开目标的祖先分支，并将事项定位到所属列顶端。点击「×」或在搜索栏中按 `Esc` 关闭搜索。
 
+### 外观设置
+
+点击顶栏「设置」按钮，可在系统默认字体和得意黑之间切换，并选择 12–24px 字号。修改即时生效并保存在本机，下次启动自动恢复；代码和数学公式继续使用各自的专用字体。
+
 ### 快捷键
 
 | 快捷键 | 操作 |
@@ -128,7 +132,7 @@ npm run start:web
 
 顶栏下载按钮可导出全部项目为 JSON。桌面版会提示实际保存路径，默认使用系统下载目录，同名备份自动编号，失败时显示错误。也可以复制整个数据目录进行文件级备份。
 
-关闭原生窗口时，可选择「最小化到托盘」「退出软件」或「取消」。「记住本次选择」默认勾选；选择最小化或退出后，下次关闭会直接执行该操作。取消不会记录选择，取消勾选则下次仍询问；可在帮助窗口中点击「重置关闭选择」重新选择。最小化到托盘或退出前，程序会等待编辑内容保存；保存失败或版本冲突时保留窗口与输入内容。点击托盘图标或使用托盘菜单的「显示主窗口」可还原窗口；菜单中的「退出软件」会再次执行保存检查后真正退出。
+关闭原生窗口时，可选择「最小化到托盘」「退出软件」或「取消」。「记住本次选择」默认勾选；选择最小化或退出后，下次关闭会直接执行该操作。取消不会记录选择，取消勾选则下次仍询问；可在设置窗口中点击「重置关闭选择」重新选择。最小化到托盘或退出前，程序会等待编辑内容保存；保存失败或版本冲突时保留窗口与输入内容。点击托盘图标或使用托盘菜单的「显示主窗口」可还原窗口；菜单中的「退出软件」会再次执行保存检查后真正退出。
 
 多窗口写入使用系统文件锁和版本检查，遇到冲突可先导出当前内容，再重新打开。
 
@@ -177,6 +181,7 @@ node tests/ui-smoke.mjs
 node tests/project-ui.mjs
 node tests/workspace-ui.mjs
 node tests/close-choice-ui.mjs
+node tests/settings-ui.mjs
 
 # 原生检查需要先完成 release 构建
 node tests/tauri-native-smoke.mjs
@@ -207,3 +212,5 @@ start.cmd        Windows 启动入口
 本项目采用 [Apache License 2.0](LICENSE) 许可证。第三方资源保留各自的版权声明和许可证。
 
 Markdown 渲染使用 [Marked](https://marked.js.org/)，公式渲染使用 [KaTeX 0.16.11](https://katex.org/docs/browser.html)。它们随程序离线分发，第三方许可证分别见 [Marked 许可证](public/vendor/MARKED-LICENSE.md) 和 [KaTeX 许可证](public/vendor/KATEX-LICENSE)。
+
+KaTeX 字体单独适用 SIL OFL 1.1，完整条款、版权与保留字体名称见 [KaTeX 字体许可证](public/vendor/fonts/OFL.txt)。可选界面字体[得意黑 Smiley Sans](https://github.com/atelier-anchor/smiley-sans)使用官方 v2.0.1 原版 WOFF2，保留其倾斜字形；对应[字体许可证](public/vendor/smiley-sans/LICENSE)及[来源与校验信息](public/vendor/smiley-sans/SOURCE.md)随软件离线分发。Windows 系统字体仅由系统提供，未复制进安装包。

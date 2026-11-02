@@ -61,12 +61,18 @@ async function choose(action,checked) {
   await closeDone();
   assert.equal(await page.locator('dialog[open]').count(),0);
 }
-async function resetViaHelp() {
+async function resetViaSettings() {
   await page.locator('.topbar [data-action="help"]').click();
+  assert.equal(await page.locator('dialog [data-action="reset-close-choice"]').count(),0);
+  await page.locator('dialog .dialog-footer [data-action="close"]').click();
+  await page.locator('.topbar [data-action="settings"]').click();
+  assert.equal(await page.locator('dialog h2').textContent(),'设置');
+  assert.match(await page.locator('[data-close-preference]').textContent(),/最小化到托盘|退出软件/);
   const reset = page.locator('dialog [data-action="reset-close-choice"]');
   assert.equal(await reset.count(),1);assert.equal(await reset.isEnabled(),true);
   await reset.click();
   assert.equal(await preference(),null);assert.equal(await reset.isDisabled(),true);
+  assert.match(await page.locator('[data-close-preference]').textContent(),/每次询问/);
   await page.locator('dialog .dialog-footer [data-action="close"]').click();
 }
 
@@ -112,7 +118,7 @@ try {
   assert.equal(afterTrayExit.state.projects[0].tasks.find(task => task.id === taskId).title,'托盘退出前保存的内容');
   passed('托盘退出事件跳过已记住的托盘偏好，先保存编辑再真正退出，且不改写偏好');
 
-  await resetViaHelp();
+  await resetViaSettings();
   await startClose();assert.equal(await remember().isChecked(),true);await choose('exit');
   assert.equal(await preference(),'exit');assert.deepEqual(await counts(),{hidden:1,destroyed:2});
   await startClose();await closeDone();
@@ -121,8 +127,8 @@ try {
   await startClose();await closeDone();
   assert.equal(await page.locator('dialog[open]').count(),0);assert.deepEqual(await counts(),{hidden:0,destroyed:1});
   assert.equal(await preference(),'exit');
-  await resetViaHelp();await startClose();await choose('cancel');
-  passed('帮助中可重置关闭选择；记住退出后下一次及重载后直接退出，重置后恢复询问');
+  await resetViaSettings();await startClose();await choose('cancel');
+  passed('关闭选择重置已移至设置，帮助中不再显示；记住退出后下一次及重载后直接退出，重置后恢复询问');
 
   for (const invalid of ['unknown','true','{"action":"hide"}']) {
     await page.evaluate(value => localStorage.setItem('yishi.closeAction',value),invalid);

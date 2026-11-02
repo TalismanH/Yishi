@@ -179,6 +179,24 @@ try {
   assert.equal(await page.locator('dialog input,dialog textarea').count(),0);
   await page.locator('dialog .dialog-footer [data-action="close"]').click();
   passed('帮助窗口宽度和快捷键说明在原生 WebView 中正常显示');
+  await page.locator('[data-action="settings"]').click();
+  assert.equal(await page.locator('dialog [data-action="reset-close-choice"]').count(),1);
+  await page.locator('[data-setting-font]').selectOption('smiley');
+  const loadedFonts = await page.evaluate(async () => (await document.fonts.load('18px "Smiley Sans"')).map(face => face.status));
+  assert.ok(loadedFonts.length > 0 && loadedFonts.every(status => status === 'loaded'));
+  assert.equal(await page.evaluate(() => document.fonts.check('18px "Smiley Sans"')),true);
+  await page.locator('[data-setting-size]').selectOption('18');
+  assert.equal(await page.locator('.overview-content').evaluate(element => getComputedStyle(element).fontSize),'18px');
+  assert.match(await page.locator('.overview-content').evaluate(element => getComputedStyle(element).fontFamily),/Smiley Sans/);
+  for (const url of ['/vendor/fonts/OFL.txt','/vendor/smiley-sans/LICENSE']) {
+    const license = await page.evaluate(async url => {const response=await fetch(url);if (!response.ok) throw new Error(`Missing license: ${url}`);return response.text();},url);
+    assert.match(license,/SIL OPEN FONT LICENSE Version 1\.1/);assert.match(license,/TERMINATION/);
+  }
+  await page.screenshot({path:path.join(artifacts,'settings.png')});
+  await page.locator('[data-setting-font]').selectOption('system');
+  await page.locator('[data-setting-size]').selectOption('14');
+  await page.locator('dialog .dialog-footer [data-action="close"]').click();
+  passed('原生设置可离线加载得意黑、调整字号及重置关闭选择，两个字体许可证均随程序内嵌');
   await page.locator('.overview-content').click();
   assert.equal(await page.locator('dialog[open]').count(),0);
   await finish('**原生 Markdown**\n\n- 连续编辑\n\n$E=mc^2$\n\n$$\\int_0^1 x^2\\,dx=\\frac13$$');

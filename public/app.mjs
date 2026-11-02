@@ -15,6 +15,7 @@ const icons = {
   help:'<circle cx="12" cy="12" r="9"/><path d="M12 7v6m0 4h.01"/>',
   locate:'<circle cx="12" cy="12" r="6"/><path d="M12 2v5m0 10v5M2 12h5m10 0h5"/>',
   up:'<path d="m5 15 7-7 7 7"/>',
+  settings:'<path d="M4 7h9m4 0h3M4 17h3m4 0h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
 };
 const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]}</svg>`;
 const escape = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -26,6 +27,20 @@ let toastTimer, pendingTimer, ignoreDragClick = false, editorPointerId = null;
 let savePromise = Promise.resolve();
 const collapsedBranches = new Map(), collapsedOverviews = new Set();
 const search = {open:false,projectId:null,query:'',scope:'all',taskId:null};
+const fontFamilies = {system:'"Segoe UI","Microsoft YaHei UI",sans-serif',smiley:'"Smiley Sans","Segoe UI","Microsoft YaHei UI",sans-serif'};
+const appearance = {font:'system',size:14};
+try {
+  const saved = JSON.parse(localStorage.getItem('yishi.appearance') ?? '{}');
+  if (saved?.font === 'system' || saved?.font === 'smiley') appearance.font = saved.font;
+  if (Number.isInteger(saved?.size) && saved.size >= 12 && saved.size <= 24) appearance.size = saved.size;
+} catch {}
+function applyAppearance() {
+  const root = document.documentElement;
+  root.dataset.font = appearance.font;
+  root.style.setProperty('--ui-font-family',fontFamilies[appearance.font]);
+  root.style.setProperty('--ui-font-size',`${appearance.size}px`);
+}
+applyAppearance();
 function branchFolds(projectId,status) {
   const key = `${projectId}:${status}`;
   if (!collapsedBranches.has(key)) collapsedBranches.set(key,new Set());
@@ -252,7 +267,7 @@ function render() {
   const scroll = {top:body?.scrollTop ?? 0,left:body?.scrollLeft ?? 0,strip:app.querySelector('.projects')?.scrollLeft ?? 0,overview:previous?.querySelector('.overview-content')?.scrollTop ?? 0};
   const columnScroll = new Map([...(previous?.querySelectorAll('.column-items') ?? [])].map(element => [element.parentElement.dataset.column,{top:element.scrollTop,left:element.scrollLeft,paddingBottom:element.style.paddingBottom}]));
   const projects = visibleProjects();
-  app.innerHTML = `<div class="shell"><header class="topbar"><strong class="brand">一事</strong><nav aria-label="项目窗口"><button class="nav-item ${view === 'active' ? 'selected' : ''}" data-action="view" data-view="active">项目</button><button class="nav-item ${view === 'archived' ? 'selected' : ''}" data-action="view" data-view="archived">归档</button></nav><div class="topbar-actions"><button class="icon-button save-status" data-save-status data-action="retry"></button>${actionButton('help','帮助','help')}${actionButton('export','导出备份','download')}${view === 'active' ? actionButton('add-project','新建项目','plus') : ''}</div></header><main class="projects" aria-label="${view === 'active' ? '项目' : '归档'}">${projects.map(projectHTML).join('')}</main></div>`;
+  app.innerHTML = `<div class="shell"><header class="topbar"><strong class="brand">一事</strong><nav aria-label="项目窗口"><button class="nav-item ${view === 'active' ? 'selected' : ''}" data-action="view" data-view="active">项目</button><button class="nav-item ${view === 'archived' ? 'selected' : ''}" data-action="view" data-view="archived">归档</button></nav><div class="topbar-actions"><button class="icon-button save-status" data-save-status data-action="retry"></button>${actionButton('settings','设置','settings')}${actionButton('help','帮助','help')}${actionButton('export','导出备份','download')}${view === 'active' ? actionButton('add-project','新建项目','plus') : ''}</div></header><main class="projects" aria-label="${view === 'active' ? '项目' : '归档'}">${projects.map(projectHTML).join('')}</main></div>`;
   renderMath(app);saveLabel();
   const current = app.querySelector('.project.expanded');
   if (previous && previous.id === current?.id) {
@@ -418,6 +433,11 @@ function rememberedCloseAction() {
   try {const action = localStorage.getItem('yishi.closeAction');return action === 'hide' || action === 'exit' ? action : null;}
   catch {return null;}
 }
+function showSettings() {
+  const closeAction = rememberedCloseAction();
+  dialog.innerHTML = `<header class="dialog-header"><h2>设置</h2>${actionButton('close','关闭','close')}</header><div class="settings-content"><label class="setting-row"><span>界面字体</span><select data-setting-font aria-label="界面字体"><option value="system" ${appearance.font === 'system' ? 'selected' : ''}>系统默认</option><option value="smiley" ${appearance.font === 'smiley' ? 'selected' : ''}>得意黑</option></select></label><label class="setting-row"><span>字号</span><select data-setting-size aria-label="字号">${Array.from({length:13},(_,index) => index+12).map(size => `<option value="${size}" ${appearance.size === size ? 'selected' : ''}>${size}px</option>`).join('')}</select></label>${window.__TAURI__ ? `<div class="setting-row"><span>关闭方式</span><div class="setting-close"><span data-close-preference>${closeAction === 'hide' ? '最小化到托盘' : closeAction === 'exit' ? '退出软件' : '每次询问'}</span><button type="button" class="secondary" data-action="reset-close-choice" ${closeAction ? '' : 'disabled'}>重置关闭选择</button></div></div>` : ''}</div><footer class="dialog-footer"><button class="primary" data-action="close">关闭</button></footer>`;
+  dialog.showModal();
+}
 function chooseCloseAction() {
   const remembered = rememberedCloseAction();
   if (remembered) return remembered;
@@ -447,7 +467,7 @@ function showHelp() {
     <p>Ctrl+F 打开当前项目的搜索栏。可按列筛选、查看匹配事项数，用上下按钮或 Enter / Shift+Enter 循环跳转；点击 × 或按 Esc 关闭搜索。</p>
     <h3>文本、备份与关闭</h3>
     <p>正文支持 Markdown 和公式：行内公式用 <code>$...$</code>，独立公式用 <code>$$...$$</code>。总体情况的分点后，顶格普通行退出列表，缩进续行保留在列表内。</p>
-    <p>顶栏下载按钮导出全部项目。桌面版关闭时可选择退出或最小化到托盘，并记住选择；需要更改时，点击下方「重置关闭选择」。</p>
+    <p>顶栏下载按钮导出全部项目。设置中可切换字体、调整字号；桌面版记住关闭方式后，也可在设置中重置关闭选择。</p>
     <h3>快捷键</h3><table><tbody>
       <tr><th scope="row"><kbd>Ctrl + B</kbd></th><td>加粗或取消加粗选中文字；无选区时插入加粗标记</td></tr>
       <tr><th scope="row"><kbd>Ctrl + F</kbd></th><td>打开当前项目的事项搜索</td></tr>
@@ -458,7 +478,7 @@ function showHelp() {
       <tr><th scope="row"><kbd>Esc</kbd></th><td>结束编辑、关闭搜索或弹窗、取消拖动</td></tr>
       <tr><th scope="row"><kbd>↑ / ↓</kbd></th><td>聚焦事项左侧把手后，调整同列、同一父事项下的顺序</td></tr>
       <tr><th scope="row"><kbd>Enter / 空格</kbd></th><td>聚焦事项左侧把手后，进入正文编辑</td></tr>
-    </tbody></table></div><footer class="dialog-footer">${window.__TAURI__ ? `<button type="button" class="secondary" data-action="reset-close-choice" ${rememberedCloseAction() ? '' : 'disabled'}>重置关闭选择</button>` : ''}<button class="primary" data-action="close">关闭</button></footer>`;
+    </tbody></table></div><footer class="dialog-footer"><button class="primary" data-action="close">关闭</button></footer>`;
   dialog.showModal();
 }
 function confirmAction(title, body, button, operation) {
@@ -530,7 +550,7 @@ function handleAction(element, point = null) {
   switch (action) {
     case 'close':closeDialog();break;
     case 'reset-close-choice':
-      try {localStorage.removeItem('yishi.closeAction');element.disabled = true;toast('下次关闭时将重新询问');}
+      try {localStorage.removeItem('yishi.closeAction');element.disabled = true;dialog.querySelector('[data-close-preference]').textContent = '每次询问';toast('下次关闭时将重新询问');}
       catch {toast('无法重置关闭方式，请重试');}break;
     case 'toggle':activeId = activeId === project.id ? null : project.id;render();break;
     case 'view':view = element.dataset.view;activeId = visibleProjects()[0]?.id ?? null;render();break;
@@ -585,6 +605,7 @@ function handleAction(element, point = null) {
       confirmAction('删除事项？',`删除「${escape(taskName(task))}」${count ? `及其 ${count} 个子事项` : ''}？`,'确认删除',() => {if (change(() => removeTask(project,task.id))) closeDialog();});break;
     }
     case 'help':showHelp();break;
+    case 'settings':showSettings();break;
     case 'export':exportBackup();break;
     case 'retry':if (conflict) exportBackup();else void save();break;
   }
@@ -611,6 +632,15 @@ document.addEventListener('compositionend',event => {
   if (event.target.matches('[data-search-query]')) event.target.dispatchEvent(new Event('input',{bubbles:true}));
 });
 document.addEventListener('change',event => {
+  if (event.target.matches('[data-setting-font],[data-setting-size]')) {
+    const value = event.target.value;
+    if (event.target.matches('[data-setting-font]')) {if (!Object.hasOwn(fontFamilies,value)) return;appearance.font = value;}
+    else {const size = Number(value);if (!Number.isInteger(size) || size < 12 || size > 24) return;appearance.size = size;}
+    applyAppearance();
+    try {localStorage.setItem('yishi.appearance',JSON.stringify(appearance));}
+    catch {toast('无法记住外观设置，本次修改仍然生效');}
+    return;
+  }
   if (!event.target.matches('[data-search-scope]')) return;
   search.scope = event.target.value;search.taskId = null;navigateSearch();app.querySelector('[data-search-scope]')?.focus({preventScroll:true});
 });
