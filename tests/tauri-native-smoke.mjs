@@ -259,6 +259,25 @@ try {
   assert.deepEqual(await currentProject(),beforeCross);
   await card(first).locator('[data-action="status"][data-status="doing"]').click();await saved();
   assert.ok((await currentProject()).tasks.filter(task => [first,second,third].includes(task.id)).every(task => task.status==='doing'));
+  const beforeDraft = await snapshot();
+  for (const [parentId,dismiss] of [[first,'Escape'],[first,'click'],[second,'Escape'],[second,'click']]) {
+    await card(parentId).locator('[data-action="add-task"]').click();
+    assert.ok(await editor().evaluate((input,parentId) => {
+      const card=input.closest('.task-card'), pane=card.closest('.column-items'), parent=pane.querySelector(`.task-card[data-task="${parentId}"]`);
+      const a=parent.getBoundingClientRect(), b=card.getBoundingClientRect(), bounds=pane.getBoundingClientRect();
+      return a.top>=bounds.top-1 && b.top>=a.bottom && b.bottom<=bounds.bottom+1 && document.activeElement===input;
+    },parentId));
+    await page.screenshot({path:path.join(artifacts,'new-task-parent.png')});
+    if (dismiss === 'Escape') await editor().press('Escape');
+    else {await editor().fill(' \n');await page.locator('.column.todo .column-heading').click();}
+    assert.equal(await page.locator('.adding-parent').count(),0);
+    assert.equal(await page.locator('.column.todo .task-card.context').count(),0);
+    assert.equal(await page.locator('.column.todo [data-action="toggle-branch"]').count(),0);
+    assert.equal(await page.locator('.column.todo [data-action="toggle-column"]').isDisabled(),true);
+    assert.deepEqual(await snapshot(),beforeDraft);
+  }
+  await page.screenshot({path:path.join(artifacts,'new-task-cancelled.png')});
+  passed('EXE 新增二级、三级事项时显示上级，Esc 或点击别处取消空白新增后清理空虚线上级且数据不变');
   await card(first).locator('[data-action="complete"]').click();await saved();
   assert.ok((await currentProject()).tasks.filter(task => [first,second,third].includes(task.id)).every(task => task.status==='done'));
   await card(first).locator('[data-action="complete"]').click();await saved();

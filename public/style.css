@@ -45,4 +45,7 @@ dialog:has(.help-content){width:820px}
 
 .remember-close{display:flex;align-items:center;gap:7px;flex-basis:100%;cursor:pointer}.remember-close input{accent-color:var(--green)}
 
+.task-card.adding-parent{position:sticky;top:0;z-index:3}
+.adding-parent .task-content{max-height:var(--adding-parent-height);overflow-y:auto}
+
 :root[data-font=smiley]{font-synthesis:weight style}:root[data-font=smiley] [data-inline-editor]{font-family:var(--ui-font-family)}dialog:has(.settings-content){width:480px}.settings-content{padding:20px 22px}.setting-row{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:12px 0}.setting-row+.setting-row{border-top:1px solid var(--line)}.setting-row>span{flex-shrink:0}.setting-row select{font:inherit;min-width:130px;padding:6px 9px;border:1px solid var(--strong-border,#bdcbb1);border-radius:4px;background:var(--card-bg,#f8f9f3)}.setting-close{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:10px}

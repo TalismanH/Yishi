@@ -705,6 +705,9 @@ try {
     {id:'ready-parent',parentId:null,title:'可完成的主事项',status:'doing',order:101},
     {id:'ready-child',parentId:'ready-parent',title:'可完成的二级事项',status:'doing',order:0},
     {id:'ready-leaf',parentId:'ready-child',title:'可完成的三级事项',status:'doing',order:0},
+    {id:'many-parent',parentId:null,title:'已有很多子事项的主事项',status:'doing',order:102},
+    {id:'many-second',parentId:'many-parent',title:Array.from({length:24},(_,index) => `多行二级事项第 ${index+1} 行`).join('\n'),status:'doing',order:0},
+    ...['many-parent','many-second'].flatMap(parentId => Array.from({length:12},(_,index) => ({id:`${parentId}-${index}`,parentId,title:`已有子事项 ${index}`,status:'todo',order:index+1}))),
   ]}];
   assert.equal((await fetch(`${origin}/api/state`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(independent)})).status,200);
   const panesPage = await browser.newPage({viewport:{width:1440,height:1000}});
@@ -755,7 +758,26 @@ try {
   assert.equal(await panesPage.locator('.overview-header').evaluate(element => element.getBoundingClientRect().top),overviewHeaderTop);
   passed('长总体情况进入编辑、连续输入、删除和自动保存均保持当前滚动位置');
   await panesPage.locator('.overview-content').evaluate(element => {element.scrollTop=100;});
-  for (const parentId of ['focus-parent','focus-second']) {
+  for (const [status,parentId] of [['doing','focus-parent'],['doing','focus-second'],['doing','ready-parent'],['doing','ready-child'],['todo','todo-fill-0']]) {
+    const add = panesPage.locator(`.column.${status} .task-card[data-task="${parentId}"] [data-action="add-task"]`);
+    for (const dismiss of ['Escape','click']) {
+      const beforeCancel = await (await fetch(`${origin}/api/state`)).json();
+      const taskIds = () => panesPage.locator('.column.todo .task-card').evaluateAll(cards => cards.map(card => card.dataset.task));
+      const branchIds = () => panesPage.locator('.column.todo [data-action="toggle-branch"]').evaluateAll(buttons => buttons.map(button => button.dataset.task));
+      const beforeTasks = await taskIds(), beforeBranches = await branchIds();
+      await add.click();
+      const input = panesPage.locator('.column.todo [data-inline-editor="task"]');
+      if (dismiss === 'Escape') await input.press('Escape');
+      else {await input.fill(' \n');await panesPage.locator('.column.todo .column-heading').click();}
+      assert.equal(await input.count(),0);
+      assert.equal(await panesPage.locator('.adding-parent').count(),0);
+      assert.deepEqual(await taskIds(),beforeTasks);
+      assert.deepEqual(await branchIds(),beforeBranches);
+      assert.deepEqual(await (await fetch(`${origin}/api/state`)).json(),beforeCancel);
+    }
+  }
+  passed('Esc 或点击别处取消空白新增时逐级清除空虚线上级，保留实际待办和仍有待办后代的分支，数据不变');
+  for (const parentId of ['focus-parent','focus-second','ready-parent','ready-child','many-parent','many-second']) {
     const add = panesPage.locator(`.column.doing .task-card[data-task="${parentId}"] [data-action="add-task"]`);
     await add.evaluate(element => element.scrollIntoView({block:'center',inline:'nearest'}));
     await pane('todo').evaluate(element => {element.scrollTop=0;});
@@ -764,10 +786,12 @@ try {
     const draftEditor = panesPage.locator('.column.todo [data-inline-editor="task"]');
     await draftEditor.waitFor();
     await draftEditor.fill('立即输入');await draftEditor.fill('');
-    await panesPage.waitForFunction(() => {
+    await panesPage.waitForFunction(parentId => {
       const input=document.querySelector('.column.todo [data-inline-editor="task"]'), card=input.closest('.task-card'), pane=card.closest('.column-items');
-      return Math.abs(card.getBoundingClientRect().top-pane.getBoundingClientRect().top) <= 2;
-    });
+      const parent=pane.querySelector(`.task-card[data-task="${parentId}"]`), a=parent.getBoundingClientRect(), b=card.getBoundingClientRect(), bounds=pane.getBoundingClientRect();
+      return Math.abs(a.top-bounds.top) <= 2 && b.top >= a.bottom && b.bottom <= bounds.bottom+1;
+    },parentId);
+    assert.equal((await panesPage.locator(`.column.todo .task-card[data-task="${parentId}"] .task-content`).innerText()).trim(),beforeAddState.state.projects[0].tasks.find(task => task.id === parentId).title);
     assert.equal(await draftEditor.evaluate(element => element === document.activeElement),true);
     const afterAdd = await panePositions();
     assert.ok(afterAdd.todo > 1000);
@@ -775,10 +799,12 @@ try {
     assert.deepEqual(await (await fetch(`${origin}/api/state`)).json(),beforeAddState);
     const insertedId = await draftEditor.evaluate(element => element.closest('.task-card').dataset.task);
     await draftEditor.fill('连续新增滚动检查');
+    await panesPage.waitForFunction(async id => (await (await fetch('/api/state')).json()).state.projects[0].tasks.some(task => task.id === id),insertedId);
     const beforeEnter = await panePositions();
     await draftEditor.press('Enter');
     const afterEnter = await panePositions();
-    assert.ok(Math.abs(afterEnter.todo-beforeEnter.todo) < 1,JSON.stringify({beforeEnter,afterEnter}));
+    if (parentId !== 'many-second') assert.ok(Math.abs(afterEnter.todo-beforeEnter.todo) < 1,JSON.stringify({beforeEnter,afterEnter}));
+    else assert.ok(afterEnter.todo >= beforeEnter.todo-1);
     assert.ok(await draftEditor.evaluate(element => {
       const card=element.closest('.task-card'), pane=card.closest('.column-items'), a=card.getBoundingClientRect(), b=pane.getBoundingClientRect();
       return a.top > b.top+20 && a.bottom <= b.bottom+1;
@@ -787,9 +813,10 @@ try {
     await panesPage.locator(`.column.todo .task-card[data-task="${insertedId}"] [data-action="delete-task"]`).click();
     await panesPage.locator('dialog button[type="submit"]').click();
     await panesPage.locator('[data-save-status][data-state="saved"]').waitFor({state:'attached'});
+    assert.equal(await panesPage.locator('.adding-parent').count(),0);
     assert.deepEqual((await (await fetch(`${origin}/api/state`)).json()).state,beforeAddState.state);
   }
-  passed('进行中点击新增会置顶待办编辑框，随后在待办按Enter新增保持可见且不置顶，其他区域不动');
+  passed('进行中新增二级、三级事项时，上级和新增框同时可见；有无待办子项及长分支均适用，连续新增不跳动，其他区域不动');
   for (const status of ['todo','doing','done']) await pane(status).evaluate(element => {element.scrollTop=0;});
   for (const status of ['todo','doing','done']) {
     const view = await pane(status).evaluate(element => ({content:element.scrollHeight,viewport:element.clientHeight}));

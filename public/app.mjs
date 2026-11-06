@@ -196,7 +196,7 @@ function taskHTML(node, project, status) {
   const attrs = `data-project="${escape(project.id)}" data-task="${escape(task.id)}"`;
   const folded = branchFolds(project.id,status).has(task.id);
   return `<div class="task-group" data-task-group="${escape(task.id)}">
-    <article class="task-card ${context ? 'context' : ''} ${task.status === 'done' && !context ? 'completed' : ''} ${search.open && search.projectId === project.id && search.taskId === task.id && !context ? 'search-hit' : ''}" ${attrs} data-column-status="${status}">
+    <article class="task-card ${context ? 'context' : ''} ${status === 'todo' && editing?.projectId === project.id && editing.newTask?.parentId === task.id ? 'adding-parent' : ''} ${task.status === 'done' && !context ? 'completed' : ''} ${search.open && search.projectId === project.id && search.taskId === task.id && !context ? 'search-hit' : ''}" ${attrs} data-column-status="${status}">
       ${children.length ? actionButton('toggle-branch',folded ? '展开子事项' : '收起子事项','chevron',`${attrs} data-status="${status}" aria-expanded="${!folded}"`) : ''}
       <div class="task-main">${context ? icon('branch') : `${!readonly ? `<span class="drag-handle" role="button" tabindex="0" aria-label="拖动事项：${escape(taskName(task))}" title="拖动；↑↓调整顺序">${icon('grip')}</span>` : ''}${task.status !== 'todo' ? `<button type="button" class="task-check ${task.status === 'done' ? 'checked' : ''}" data-action="complete" ${attrs} aria-label="${task.status === 'done' ? '恢复进行中' : '完成事项'}" title="${task.status === 'done' ? '恢复进行中' : '完成事项'}" ${readonly ? 'disabled' : ''}>${task.status === 'done' ? icon('check') : ''}</button>` : ''}`}${editable('task',project,task.title,task.id)}</div>
       <div class="task-actions">${level < 3 ? actionButton('locate-task','定位其他列中的同一事项','locate',attrs) : ''}${!context && !readonly ? `${task.status === 'todo' ? actionButton('status','开始办理','play',`${attrs} data-status="doing"`) : task.status === 'doing' ? actionButton('status','移回待办','pause',`${attrs} data-status="todo"`) : ''}${level < 3 && task.status !== 'done' ? actionButton('add-task','新增子事项','plus',`${attrs} data-parent="${escape(task.id)}"`) : ''}${actionButton('delete-task','删除事项','close',attrs)}` : ''}</div>
@@ -341,6 +341,12 @@ function mountEditor(element) {
   const pane = element.closest('.overview-content,.column-items'), top = pane?.scrollTop;
   element.classList.add('editing');element.replaceChildren(input);
   fitEditor(input);input.focus({preventScroll:true});input.setSelectionRange(input.value.length,input.value.length);
+  const parent = pane?.querySelector('.adding-parent');
+  if (parent) {
+    const content = parent.querySelector('.task-content'), card = element.closest('.task-card');
+    const space = pane.clientHeight-card.getBoundingClientRect().height-parseFloat(getComputedStyle(parent).marginBottom);
+    pane.style.setProperty('--adding-parent-height',`${Math.max(24,space-parent.getBoundingClientRect().height+content.getBoundingClientRect().height)}px`);
+  }
   if (pane) pane.scrollTop = top;
   if (editing.point) showEditorCursor(input,editing.cursor,editing.point);
 }
@@ -384,7 +390,26 @@ function finishEditor() {
   const edit = editing;
   if (!persistEditor() && edit.value.trim()) return false;
   editing = null;clearTimeout(editTimer);
-  if (edit.newTask) {edit.element.closest('.task-group').remove();return;}
+  app.querySelector('.adding-parent')?.classList.remove('adding-parent');
+  if (edit.newTask) {
+    let group = edit.element.closest('.task-group');
+    const column = group.closest('.column');
+    while (group) {
+      const parent = group.parentElement.closest('.task-group');
+      group.remove();
+      if (!parent || parent.querySelector(':scope > .task-children > .task-group')) break;
+      parent.querySelector(':scope > .task-children').remove();
+      const card = parent.querySelector(':scope > .task-card');
+      card.querySelector('[data-action="toggle-branch"]')?.remove();
+      group = card.classList.contains('context') ? parent : null;
+    }
+    if (!column.querySelector('[data-action="toggle-branch"]')) {
+      const toggle = column.querySelector('[data-action="toggle-column"]');
+      toggle.disabled = true;toggle.setAttribute('aria-expanded','false');
+      toggle.title = '展开本列所有子事项';toggle.setAttribute('aria-label',toggle.title);
+    }
+    return;
+  }
   const project = projectById(edit.projectId);
   const value = edit.type === 'name' ? project.name : edit.type === 'summary' ? project.summary : project.tasks.find(task => task.id === edit.taskId)?.title;
   edit.element.classList.remove('editing');edit.element.innerHTML = edit.type === 'name' ? escape(value) : markdown(value ?? '',edit.type === 'summary');renderMath(edit.element);
@@ -540,7 +565,9 @@ function scrollCardToTop(card) {
   const pane = card.closest('.column-items');
   pane.style.paddingBottom = '';
   const bounds = pane.getBoundingClientRect(), rect = card.getBoundingClientRect();
-  const top = pane.scrollTop+rect.top-bounds.top;
+  const parent = editing?.taskId === card.dataset.task ? pane.querySelector('.adding-parent') : null;
+  const offset = parent ? parent.getBoundingClientRect().height+parseFloat(getComputedStyle(parent).marginBottom) : 0;
+  const top = pane.scrollTop+rect.top-bounds.top-offset;
   const end = pane.scrollTop+pane.lastElementChild.getBoundingClientRect().bottom-bounds.top;
   // Leave enough scroll space below boundary items to align them with the column top.
   pane.style.paddingBottom = `${Math.max(0,pane.clientHeight-(end-top))}px`;
