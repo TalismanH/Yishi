@@ -257,7 +257,8 @@ try {
   const doingBox = await page.locator('.column.doing .column-items').boundingBox();
   await page.mouse.move(doingBox.x+30,doingBox.y+30,{steps:8});await page.mouse.up();await saved();
   assert.deepEqual(await currentProject(),beforeCross);
-  await card(first).locator('[data-action="status"][data-status="doing"]').click();await saved();
+  await card(first).locator('.task-content').click();
+  await editor().press('Control+Shift+Enter');await saved();
   assert.ok((await currentProject()).tasks.filter(task => [first,second,third].includes(task.id)).every(task => task.status==='doing'));
   const beforeDraft = await snapshot();
   for (const [parentId,dismiss] of [[first,'Escape'],[first,'click'],[second,'Escape'],[second,'click']]) {
@@ -281,9 +282,10 @@ try {
   await card(first).locator('[data-action="complete"]').click();await saved();
   assert.ok((await currentProject()).tasks.filter(task => [first,second,third].includes(task.id)).every(task => task.status==='done'));
   await card(first).locator('[data-action="complete"]').click();await saved();
-  await card(first).locator('[data-action="status"][data-status="todo"]').click();await saved();
+  await card(first).locator('.task-content').click();
+  await editor().press('Control+Shift+Enter');await saved();
   assert.ok((await currentProject()).tasks.filter(task => [first,second,third].includes(task.id)).every(task => task.status==='todo'));
-  passed('禁止跨列拖动，状态严格依次切换并连带后代');
+  passed('禁止跨列拖动，编辑时 Ctrl+Shift+Enter 双向切换待办与进行中并连带后代');
   await page.locator('[data-action="delete-project"]').click();
   await page.locator('dialog .secondary[data-action="close"]').click();
   assert.ok(await currentProject());

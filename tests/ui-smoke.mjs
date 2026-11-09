@@ -141,12 +141,16 @@ try {
 
   await page.locator('[data-action="edit-summary"]').first().click();
   assert.equal(await page.locator('dialog[open]').count(),0);
+  const beforeUnsafeHTML = errors.length;
   await editor().fill('## 测试总览\n\n**Markdown** 与 $\\frac{a_1}{b^2}$\n\n$$\\sum_{i=1}^{n} i$$\n\n<script>window.bad=true</script>\n<a href="javascript:alert(1)" onclick="window.bad=true">不安全链接</a>');
   await page.locator('.column-heading').first().click();
   await page.waitForFunction(() => !document.querySelector('[data-inline-editor]'));await saved();
   assert.ok(await page.locator('.overview .katex').count() >= 2);
   assert.equal(await page.locator('.overview script,.overview [onclick],.overview a[href^="javascript:"]').count(),0);
   assert.equal(await page.evaluate(() => Boolean(window.bad)),false);
+  // Edge can report the deliberately blocked onclick while parsing this test fixture.
+  const blockedHandler = errors.findIndex((message,index) => index >= beforeUnsafeHTML && message.startsWith('Executing inline event handler violates the following Content Security Policy directive'));
+  if (blockedHandler >= 0) errors.splice(blockedHandler,1);
   passed('总体情况原位编辑、失焦后渲染 Markdown/公式并过滤危险 HTML');
 
   await page.locator('[data-action="edit-summary"]').click();
@@ -276,17 +280,47 @@ try {
   assert.deepEqual((await snapshot()).projects[0],before);
   passed('待办没有完成框，且父事项不能让待办子事项跳过进行中');
 
-  await card('reading').locator('[data-action="status"][data-status="doing"]').click();await saved();
+  const readingBody = card('reading').locator('.task-content');
+  await readingBody.click();
+  await editor().fill('读完一篇收藏的文章并整理笔记');
+  await editor().press('Control+Shift+Enter');await saved();
   let project = (await snapshot()).projects[0];
   assert.equal(project.tasks.find(task => task.id === 'reading').status,'doing');
+  assert.equal(project.tasks.find(task => task.id === 'reading').title,'读完一篇收藏的文章并整理笔记');
   assert.equal(project.tasks.find(task => task.id === 'formula').status,'doing');
+  assert.equal(await readingBody.evaluate(element => element === document.activeElement),true);
   await card('reading').locator('[data-action="complete"]').click();await saved();
   assert.equal((await snapshot()).projects[0].tasks.find(task => task.id === 'reading').status,'done');
+  await readingBody.click();
+  await editor().press('Control+Shift+Enter');
+  assert.equal(await card('reading').getAttribute('data-column-status'),'done');
+  assert.equal(await editor().count(),1);
+  await editor().press('Escape');
   await card('reading').locator('[data-action="complete"]').click();await saved();
   assert.equal((await snapshot()).projects[0].tasks.find(task => task.id === 'reading').status,'doing');
-  await card('reading').locator('[data-action="status"][data-status="todo"]').click();await saved();
+  await readingBody.click();
+  await editor().press('Control+Shift+Enter');await saved();
   assert.equal((await snapshot()).projects[0].tasks.find(task => task.id === 'formula').status,'todo');
-  passed('快捷操作严格遵守待办 → 进行中 → 已完成及反向逐级切换');
+  passed('在编辑框按 Ctrl+Shift+Enter 保存正文并双向切换待办和进行中，已完成事项继续编辑');
+
+  await card('design').locator('.task-content').click();
+  await editor().fill('梳理产品体验并补充记录');
+  await editor().press('Control+Shift+Enter');
+  assert.equal(await card('design').getAttribute('data-column-status'),'doing');
+  assert.equal(await editor().inputValue(),'梳理产品体验并补充记录');
+  await page.waitForFunction(async () => (await (await fetch('/api/state')).json()).state.projects[0].tasks.find(task => task.id === 'design').title === '梳理产品体验并补充记录');
+  await editor().press('Escape');
+
+  await card('interaction').locator('[data-action="toggle-branch"]').click();
+  const statusBody = card('status').locator('.task-content');
+  await statusBody.click();
+  await editor().press('Control+Shift+Enter');await saved();
+  assert.equal(await card('status').getAttribute('data-column-status'),'doing');
+  assert.equal(await statusBody.evaluate(element => element === document.activeElement),true);
+  await page.keyboard.press('Control+Shift+Enter');await saved();
+  assert.equal(await card('status').getAttribute('data-column-status'),'todo');
+  assert.equal(await statusBody.evaluate(element => element === document.activeElement),true);
+  passed('切换三级事项会展开目标列的折叠分支并保留焦点，可以连续按同一个快捷键切回');
 
   before = (await snapshot()).projects[0];
   await drag('.task-card[data-task="interaction"]:not(.context)','.column[data-column="done"] .column-heading');
@@ -543,7 +577,12 @@ try {
 
   await page.locator('[data-action="add-project"]').click();await finish('删除验收');
   const deleteId = (await snapshot()).projects.find(item => item.name === '删除验收').id;
-  await page.locator('.column.todo .add-task').click();await finish('随项目删除的事项');
+  await page.locator('.column.todo .add-task').click();
+  await editor().press('Control+Shift+Enter');
+  assert.equal(await editor().inputValue(),'');
+  await editor().fill('随项目删除的事项');
+  await editor().press('Control+Shift+Enter');await saved();
+  assert.equal((await snapshot()).projects.find(item => item.id === deleteId).tasks[0].status,'doing');
   const beforeDelete = await snapshot();
   await page.locator('[data-action="delete-project"]').click();
   assert.deepEqual(await snapshot(),beforeDelete);

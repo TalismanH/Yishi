@@ -365,15 +365,19 @@ function beginEditor(type, project, taskId = null, point = null) {
   if (type === 'summary' && point) {editing.cursor = summaryCursor(element,value,point);editing.point = point;}
   mountEditor(element);
 }
-function persistEditor() {
-  clearTimeout(editTimer);
+function persistEditor(status) {
+  // Keep the scheduled autosave if the requested move is rejected.
+  if (!status) clearTimeout(editTimer);
   if (!editing) return true;
   const edit = editing, project = projectById(edit.projectId);
   const value = edit.type === 'name' ? edit.value.trim() : edit.value;
-  if (!value.trim() && edit.type !== 'summary') return !edit.newTask;
+  if (!value.trim() && edit.type !== 'summary') {
+    if (status) toast('请先填写事项正文');
+    return !status && !edit.newTask;
+  }
   const task = project.tasks.find(task => task.id === edit.taskId);
   const previous = edit.type === 'name' ? project.name : edit.type === 'summary' ? project.summary : task?.title;
-  if (value === previous) return true;
+  if (value === previous && !status) return true;
   const okay = change(() => {
     if (edit.type === 'name') project.name = value;
     else if (edit.type === 'summary') project.summary = value;
@@ -381,14 +385,15 @@ function persistEditor() {
       project.tasks.push({...edit.newTask,title:value});
       if (edit.beforeId) moveTask(project,edit.taskId,{beforeId:edit.beforeId});
     } else project.tasks.find(task => task.id === edit.taskId).title = value;
+    if (status) setTaskStatus(project,edit.taskId,status);
   },false);
   if (okay) edit.newTask = null;
   return okay;
 }
-function finishEditor() {
+function finishEditor(status) {
   if (!editing) return;
   const edit = editing;
-  if (!persistEditor() && edit.value.trim()) return false;
+  if (!persistEditor(status) && (status || edit.value.trim())) return false;
   editing = null;clearTimeout(editTimer);
   app.querySelector('.adding-parent')?.classList.remove('adding-parent');
   if (edit.newTask) {
@@ -500,9 +505,10 @@ function showHelp() {
       <tr><th scope="row"><kbd>Ctrl + B</kbd></th><td>加粗或取消加粗选中文字；无选区时插入加粗标记</td></tr>
       <tr><th scope="row"><kbd>Ctrl + F</kbd></th><td>打开当前项目的事项搜索</td></tr>
       <tr><th scope="row"><kbd>Enter</kbd></th><td>编辑事项时新增同级；搜索时跳到下一项</td></tr>
-      <tr><th scope="row"><kbd>Shift + Enter</kbd></th><td>编辑事项时换行；搜索时跳到上一项</td></tr>
+      <tr><th scope="row"><kbd>Shift + Enter</kbd></th><td>编辑事项时换行，搜索时跳到上一项</td></tr>
       <tr><th scope="row"><kbd>Tab / Shift + Tab</kbd></th><td>降低 / 提升事项层级，最多三级；空白新增项也适用</td></tr>
       <tr><th scope="row"><kbd>Ctrl + Enter</kbd></th><td>结束编辑并渲染</td></tr>
+      <tr><th scope="row"><kbd>Ctrl + Shift + Enter</kbd></th><td>保存事项正文并在待办和进行中之间切换</td></tr>
       <tr><th scope="row"><kbd>Esc</kbd></th><td>结束编辑、关闭搜索或弹窗、取消拖动</td></tr>
       <tr><th scope="row"><kbd>↑ / ↓</kbd></th><td>聚焦事项左侧把手后，调整同列、同一父事项下的顺序</td></tr>
       <tr><th scope="row"><kbd>Enter / 空格</kbd></th><td>聚焦事项左侧把手后，进入正文编辑</td></tr>
@@ -693,6 +699,25 @@ document.addEventListener('keydown',event => {
     if (event.key === 'ArrowLeft' && index === 0 || event.key === 'ArrowRight' && index === projects.length-1) return;
     change(() => moveProject(state,id,event.key === 'ArrowLeft' ? projects[index-1].id : projects[index+2]?.id));
     document.getElementById(`project-${id}`).querySelector('.project-sort-handle').focus({preventScroll:true});return;
+  }
+  const taskEditor = editing?.type === 'task' && event.target.matches('[data-inline-editor="task"]');
+  if (event.key === 'Enter' && event.ctrlKey && event.shiftKey && !event.metaKey && !event.altKey &&
+      (taskEditor || event.target.matches('.task-content[data-action="edit-task"]'))) {
+    event.preventDefault();
+    const button = event.target.closest('.task-card').querySelector('[data-action="status"]');
+    if (!button || event.repeat || dragged || dialog.open) return;
+    const {project:projectId,task:taskId,status} = button.dataset;
+    const project = projectById(projectId);
+    if (taskEditor) {
+      if (finishEditor(status) === false) return;
+    } else {
+      if (finishEditor() === false || !button.isConnected) return;
+      if (!change(() => setTaskStatus(project,taskId,status),false)) return;
+    }
+    expandAncestors(project,project.tasks.find(task => task.id === taskId),status);
+    render();
+    app.querySelector(`.task-card[data-task="${CSS.escape(taskId)}"]:not(.context) .task-content`)?.focus();
+    return;
   }
   const handle = event.target.closest('.drag-handle');
   if (handle) {
