@@ -339,7 +339,7 @@ pub fn validate_state(state: &Value) -> Result<(), StoreError> {
         let mut parents = HashMap::new();
         for task in tasks {
             let id = text(task.get("id"), 100, "事项编号", false)?;
-            text(task.get("title"), 20000, "事项内容", false)?;
+            text(task.get("title"), 20000, "事项内容", true)?;
             let parent = match task.get("parentId") {
                 Some(Value::Null) => None,
                 other => Some(text(other, 100, "父事项编号", false)?),
@@ -425,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn seeds_restarts_and_saves_without_changing_markdown() {
+    fn seeds_saves_and_restarts_preserving_markdown_and_empty_tasks() {
         let directory = Directory::new();
         let store = store(&directory);
         let initial = store.load(state()).unwrap();
@@ -433,6 +433,7 @@ mod tests {
         let old = fs::read(store.directory.join("workspace.json")).unwrap();
         let mut changed = initial.state;
         changed["projects"][0]["name"] = json!("更新后的项目");
+        changed["projects"][0]["tasks"][0]["title"] = json!("");
         assert_eq!(store.save(changed.clone(), 0).unwrap().revision, 1);
         let restarted = Store::new(store.directory.clone(), Vec::new());
         assert_eq!(

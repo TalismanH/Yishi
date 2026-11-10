@@ -65,7 +65,7 @@ export function validateState(state) {
       text(task.id, 100, '事项编号');
       if (ids.has(task.id)) throw new Error('事项编号不能重复');
       ids.add(task.id);
-      text(task.title, 20000, '事项内容');
+      text(task.title, 20000, '事项内容', true);
       if (task.parentId !== null) text(task.parentId, 100, '父事项编号');
       if (!STATUSES.has(task.status)) throw new Error('事项状态不正确');
       if (!Number.isSafeInteger(task.order) || task.order < 0) throw new Error('事项排序不正确');
@@ -94,7 +94,8 @@ export function setTaskStatus(project, id, status) {
   if (!STATUSES.has(status)) throw new Error('事项状态不正确');
   const branch = [requireTask(project, id), ...descendants(project, id)];
   const target = STATUS_ORDER.indexOf(status);
-  if (branch.some(item => !STATUSES.has(item.status) || Math.abs(STATUS_ORDER.indexOf(item.status) - target) > 1)) {
+  if (branch.some(item => !STATUSES.has(item.status) ||
+    ((item.id === id || item.title.trim()) && Math.abs(STATUS_ORDER.indexOf(item.status) - target) > 1))) {
     throw new Error('请按「待办理 ↔ 进行中 ↔ 已完成」逐步切换，子事项也不能跳级');
   }
   for (const item of branch) item.status = status;
@@ -113,7 +114,12 @@ export function moveTask(project, id, options = {}) {
   const parentId = options.parentId === undefined ? original.parentId : options.parentId;
   const branchIds = new Set([id, ...descendants(project, id).map(task => task.id)]);
   if (branchIds.has(parentId)) throw new Error('不能移入自己或自己的子事项');
-  if (parentId !== null) requireTask(project, parentId);
+  if (parentId !== null) {
+    const parent = requireTask(project, parentId);
+    if (options.status !== undefined && parentId !== original.parentId && original.status !== 'done' && parent.status === 'done') {
+      throw new Error('待办项和进行中的事项不能拖入已完成事项下');
+    }
+  }
   const next = { ...project, tasks: project.tasks.map(task => ({ ...task })) };
   const moving = requireTask(next, id);
   moving.parentId = parentId;
@@ -131,8 +137,9 @@ export function moveTask(project, id, options = {}) {
 }
 
 export function progress(project) {
-  const total = project.tasks.length;
-  const done = project.tasks.filter(task => task.status === 'done').length;
+  const visible = project.tasks.filter(task => task.title.trim());
+  const total = visible.length;
+  const done = visible.filter(task => task.status === 'done').length;
   return { done, total, percent: total ? Math.round(done / total * 100) : 0 };
 }
 
@@ -141,7 +148,7 @@ export function canArchive(project) {
   return total > 0 && done === total;
 }
 
-export function projectColumn(project, status) {
+export function projectColumn(project, status, draftId) {
   if (!STATUSES.has(status)) throw new Error('事项状态不正确');
   const children = new Map();
   for (const task of project.tasks) {
@@ -151,6 +158,7 @@ export function projectColumn(project, status) {
   function nodes(parentId) {
     return (children.get(parentId) || []).slice().sort((a, b) => a.order - b.order).flatMap(task => {
       const nested = nodes(task.id);
+      if (task.id !== draftId && !task.title.trim()) return nested;
       return task.status === status || nested.length
         ? [{ task, context: task.status !== status, children: nested }]
         : [];

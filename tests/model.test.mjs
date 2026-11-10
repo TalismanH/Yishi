@@ -57,14 +57,28 @@ test('moving a root reorders siblings and preserves every descendant status', ()
   assert.equal(depthOf(project, 'c'), 3);
 });
 
-test('moving second-level task preserves its third-level subtree and changes parent', () => {
+test('dragging between todo and doing parents preserves the subtree and all statuses', () => {
   const project = fixture();
+  project.tasks.find(t => t.id === 'd').status = 'doing';
+  const statuses = project.tasks.map(task => task.status);
   moveTask(project, 'b', { parentId: 'd', beforeId: 'e', status: 'todo' });
   assert.equal(project.tasks.find(t => t.id === 'b').parentId, 'd');
   assert.equal(project.tasks.find(t => t.id === 'c').parentId, 'b');
   assert.equal(project.tasks.find(t => t.id === 'b').order, 0);
   assert.equal(project.tasks.find(t => t.id === 'e').order, 1);
-  assert.equal(project.tasks.find(t => t.id === 'c').status, 'todo');
+  moveTask(project, 'e', { parentId: 'b', status: 'doing' });
+  assert.equal(project.tasks.find(t => t.id === 'e').parentId, 'b');
+  assert.deepEqual(project.tasks.map(task => task.status), statuses);
+});
+
+test('dragging under a completed parent rejects a new parent but allows existing child sorting', () => {
+  const project = fixture(), original = structuredClone(project);
+  for (const [id, status] of [['a', 'doing'], ['b', 'todo']]) {
+    assert.throws(() => moveTask(project, id, { parentId: 'd', status }), /已完成/);
+    assert.deepEqual(project, original);
+  }
+  moveTask(project, 'e', { parentId: 'd', status: 'doing' });
+  assert.deepEqual(project, original);
 });
 
 test('a same-status drag option preserves mixed descendant statuses', () => {
@@ -163,6 +177,25 @@ test('columns include ancestor context and preserve hierarchy without duplicate 
   assert.deepEqual(projectColumn(project, 'done').map(n => n.task.id), ['d']);
 });
 
+test('blank tasks are hidden without losing descendants and do not block completion or archive', () => {
+  const project = fixture();
+  project.tasks[1].title = ' \n';
+  const empty = { id: 'empty', parentId: null, title: '', status: 'todo', order: 2 };
+  project.tasks.push(empty);
+  const rows = projectColumn(project, 'todo');
+  assert.deepEqual(rows.map(node => node.task.id), ['a']);
+  assert.deepEqual(rows[0].children.map(node => node.task.id), ['c']);
+  assert.equal(rows[0].children[0].task.parentId, 'b');
+  assert.deepEqual(projectColumn(project, 'todo', empty.id).map(node => node.task.id), ['a', 'empty']);
+  assert.deepEqual(progress(project), { total: 4, done: 1, percent: 25 });
+  assert.throws(() => setTaskStatus(project, 'a', 'done'), /不能跳级/);
+  setTaskStatus(project, 'c', 'doing');
+  setTaskStatus(project, 'a', 'done');
+  setTaskStatus(project, 'd', 'done');
+  assert.equal(empty.status, 'todo');
+  assert.equal(canArchive(project), true);
+});
+
 test('progress counts actual tasks and archive requires a nonempty completed project', () => {
   const project = fixture();
   assert.deepEqual(progress(project), { total: 5, done: 1, percent: 20 });
@@ -184,7 +217,7 @@ test('validation rejects duplicate IDs, orphan parents, cycles and fourth levels
     p => { p.tasks[4].parentId = 'c'; },
     p => { p.tasks[0].status = 'bad'; },
     p => { p.tasks[0].order = -1; },
-    p => { p.tasks[0].title = ' '; },
+    p => { p.tasks[0].title = null; },
   ];
   for (const mutate of mutations) {
     const project = fixture();

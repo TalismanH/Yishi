@@ -24,6 +24,12 @@ async function saved() {await page.locator('[data-save-status][data-state="saved
 async function snapshot() {return (await (await fetch(`${origin}/api/state`)).json()).state;}
 const editor = () => page.locator('[data-inline-editor]');
 const card = id => page.locator(`.task-card[data-task="${id}"]:not(.context)`);
+async function expandColumns(surface = page) {
+  for (const status of ['todo','doing','done']) {
+    const toggle = surface.locator(`.column.${status} [data-action="toggle-column"][aria-expanded="false"]:enabled`);
+    if (await toggle.count()) await toggle.click();
+  }
+}
 async function finish(content) {
   if (content !== undefined) await editor().fill(content);
   await editor().press('Control+Enter');
@@ -60,6 +66,12 @@ try {
   assert.equal((await page.locator('.column.todo .column-heading').textContent()).trim(),'待办项');
   assert.equal(await page.locator('.column.done [data-action="add-task"]').count(),0);
   passed('列顺序为待办项、进行中、已完成，已完成事项没有新增按钮');
+  assert.equal(await card('design').isVisible(),true);
+  assert.equal(await card('interaction').isVisible(),false);
+  assert.equal(await page.locator('.task-children:not([hidden])').count(),0);
+  await expandColumns();
+  assert.equal(await card('interaction').isVisible(),true);
+  passed('启动时三列默认收起子事项，批量展开后可见');
   for (const status of ['todo','doing','done']) {
     const region = page.locator(`.column.${status} .column-items`);
     assert.equal(await region.getAttribute('role'),'region');
@@ -219,6 +231,7 @@ try {
   await page.reload();await saved();
   assert.deepEqual(await overviewMarkup(),listResult);
   assert.equal((await snapshot()).projects[0].summary,listMarkdown);
+  await expandColumns();
   passed('分点后的顶格普通行退出列表，连续列表、明确缩进、嵌套、代码与公式保留，重开与原文保存一致');
 
   async function clickSummaryText(surface, selector, text) {
@@ -323,11 +336,30 @@ try {
   passed('切换三级事项会展开目标列的折叠分支并保留焦点，可以连续按同一个快捷键切回');
 
   before = (await snapshot()).projects[0];
-  await drag('.task-card[data-task="interaction"]:not(.context)','.column[data-column="done"] .column-heading');
+  const activeHandle = card('interaction').locator('.drag-handle');
+  await activeHandle.scrollIntoViewIfNeeded();
+  const start = await activeHandle.boundingBox(), completed = await card('research').boundingBox();
+  await page.mouse.move(start.x+start.width/2,start.y+start.height/2);
+  await page.mouse.down();
+  await page.mouse.move(completed.x+completed.width-16,completed.y+completed.height/2,{steps:8});
+  assert.equal(await page.locator('.column.done .drop-nest:visible,.column.done.drag-over,.column.done .drop-before,.column.done .drop-after').count(),0);
+  await page.mouse.up();await saved();
   assert.deepEqual((await snapshot()).projects[0],before);
   await drag('.task-card[data-task="reading"]:not(.context)','.column.doing .column-heading');
   assert.deepEqual((await snapshot()).projects[0],before);
-  passed('真实指针跨状态拖动被拒绝，不改变状态、层级或顺序');
+  passed('拖向已完成列没有落点提示，跨列放在空白处也不改变数据');
+
+  await drag('.task-card[data-task="interaction"]:not(.context)','[data-nest="reading"]',.5);
+  project = (await snapshot()).projects[0];
+  assert.equal(project.tasks.find(task => task.id === 'interaction').parentId,'reading');
+  assert.equal(project.tasks.find(task => task.id === 'status').parentId,'interaction');
+  await drag('.task-card[data-task="interaction"]:not(.context)','[data-nest="design"]',.5);
+  await drag('.task-card[data-task="review"]:not(.context)','[data-nest="notes"]',.5);
+  project = (await snapshot()).projects[0];
+  assert.equal(project.tasks.find(task => task.id === 'review').parentId,'notes');
+  assert.deepEqual(project.tasks.map(({id,status}) => ({id,status})),before.tasks.map(({id,status}) => ({id,status})));
+  await drag('.task-card[data-task="review"]:not(.context)','.task-card[data-task="reading"]:not(.context)');
+  passed('待办和进行中可以双向拖为子事项，保留各事项及后代状态');
 
   await drag('.task-card[data-task="reading"]:not(.context)','.task-card[data-task="review"]:not(.context)');
   project = (await snapshot()).projects[0];
@@ -347,6 +379,21 @@ try {
   assert.equal(project.tasks.find(task => task.id === 'reading').order,readingOrder);
   assert.equal(await card('reading').locator('.katex').count(),1);
   passed('已有事项直接原位修改并渲染，编辑正文不改变排序');
+
+  await card('reading').locator('.task-content').click();
+  await editor().press('Control+a');await editor().press('Control+x');
+  assert.equal(await editor().count(),0);
+  await saved();
+  const emptyReading = (await snapshot()).projects[0].tasks.find(task => task.id === 'reading');
+  assert.equal(emptyReading.title,'');
+  assert.equal(emptyReading.order,readingOrder);
+  assert.equal(await page.locator('.task-card[data-task="reading"]').count(),0);
+  assert.equal(await card('formula').isVisible(),true);
+  assert.equal((await snapshot()).projects[0].tasks.find(task => task.id === 'formula').parentId,'reading');
+  await page.reload();await saved();
+  assert.equal(await page.locator('.task-card[data-task="reading"]').count(),0);
+  assert.equal(await card('formula').isVisible(),true);
+  passed('剪空已有事项立即隐藏卡片，保留数据与可见子事项，刷新后仍隐藏');
 
   await page.locator('[data-action="archive"]').click();
   assert.equal(await page.locator('dialog button[type="submit"]').count(),0);
@@ -370,7 +417,10 @@ try {
 
   await page.locator('.column.todo .add-task').click();
   assert.equal(await page.locator('dialog[open]').count(),0);
-  await editor().fill('验收主事项');await editor().press('Enter');
+  await editor().fill('验收主事项');
+  await editor().evaluate(input => input.setSelectionRange(0,0));
+  await editor().press('Enter');
+  assert.equal(await editor().inputValue(),'');
   await editor().fill('验收二级事项');await editor().press('Tab');
   await editor().press('Enter');
   await editor().fill('验收三级事项');await editor().press('Tab');
@@ -427,7 +477,12 @@ try {
   assert.equal((await currentProject()).tasks.find(task => task.id === third).parentId,second);
   passed('Shift+Tab 提升层级，Tab 可恢复原有三级结构');
 
-  await card(third).locator('.task-content').click();await editor().press('Enter');
+  await card(third).locator('.task-content').click();
+  const intactTitle = await editor().inputValue();
+  await editor().evaluate(input => input.setSelectionRange(2,2));
+  await editor().press('Enter');await saved();
+  assert.equal(await editor().inputValue(),'');
+  assert.equal((await currentProject()).tasks.find(task => task.id === third).title,intactTitle);
   await editor().fill('不能成为第四级');await editor().press('Tab');await finish();
   created = await currentProject();
   const fourth = created.tasks.find(task => task.title === '不能成为第四级');
@@ -609,6 +664,7 @@ try {
   assert.equal(await page.locator('.project').count(),0);
   await page.locator('[data-action="view"][data-view="active"]').click();
   await page.locator(`[data-action="toggle"][data-project="${projectId}"]`).click();
+  await expandColumns();
   passed('已归档项目也可二次确认删除，已完成条目始终没有新增按钮');
 
   const downloadPromise = page.waitForEvent('download');
@@ -754,6 +810,7 @@ try {
   await panesPage.emulateMedia({reducedMotion:'no-preference'});
   await panesPage.goto(origin);
   await panesPage.locator('[data-save-status][data-state="saved"]').waitFor({state:'attached'});
+  await expandColumns(panesPage);
   const pane = status => panesPage.locator(`.column.${status} .column-items`);
   const attention = () => panesPage.locator('.pending-attention').evaluateAll(elements => elements.map(element => element.dataset.task));
   const panePositions = () => panesPage.evaluate(() => Object.fromEntries([...document.querySelectorAll('.column-items')].map(element => [element.parentElement.dataset.column,element.scrollTop]).concat([['overview',document.querySelector('.overview-content').scrollTop]])));
@@ -1017,6 +1074,7 @@ try {
   ]}];
   assert.equal((await fetch(`${origin}/api/state`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(layoutFixture)})).status,200);
   await panesPage.reload();await panesPage.locator('[data-save-status][data-state="saved"]').waitFor({state:'attached'});
+  await expandColumns(panesPage);
   await panesPage.mouse.move(0,0);
   const layout = await panesPage.locator('.task-card').evaluateAll(cards => cards.map(card => {
     const rect=card.getBoundingClientRect(), root=card.parentElement.parentElement.classList.contains('column-items');

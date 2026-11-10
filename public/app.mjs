@@ -177,7 +177,7 @@ function change(operation, rerender = true) {
 
 const projectById = id => state.projects.find(project => project.id === id);
 const visibleProjects = () => state.projects.filter(project => view === 'archived' ? project.archivedAt : !project.archivedAt);
-const taskName = task => task.title.split('\n')[0].replace(/[#*`_$]/g,'').slice(0,35);
+const taskName = task => task.title.split('\n')[0].replace(/[#*`_$]/g,'').slice(0,35).trim() || '空事项';
 function actionButton(action, title, name, attributes = '') {
   return `<button type="button" class="icon-button" data-action="${action}" aria-label="${escape(title)}" title="${escape(title)}" ${attributes}>${icon(name)}</button>`;
 }
@@ -205,7 +205,7 @@ function taskHTML(node, project, status) {
   </div>`;
 }
 function columnHTML(project,status,label) {
-  const nodes = projectColumn(project,status), branches = flatNodes(nodes).filter(node => node.children.length);
+  const nodes = projectColumn(project,status,editing?.newTask?.id), branches = flatNodes(nodes).filter(node => node.children.length);
   const expanded = branches.some(node => !branchFolds(project.id,status).has(node.task.id)), id = escape(project.id);
   return `<section class="column ${status}" data-column="${status}" data-project="${id}" aria-label="${label}"><h2 class="column-heading"><span class="status-dot"></span>${label}${actionButton('toggle-column',expanded ? '收起本列所有子事项' : '展开本列所有子事项','chevron',`data-project="${id}" data-status="${status}" aria-expanded="${expanded}" ${branches.length ? '' : 'disabled'}`)}</h2><div class="column-items" tabindex="0" role="region" aria-label="${label}列表">${nodes.map(node => taskHTML(node,project,status)).join('')}${!project.archivedAt && status === 'todo' ? `<button class="add-task" data-action="add-task" data-project="${id}" aria-label="新增待办" title="新增待办">${icon('plus')}</button>` : ''}</div></section>`;
 }
@@ -371,10 +371,11 @@ function persistEditor(status) {
   if (!editing) return true;
   const edit = editing, project = projectById(edit.projectId);
   const value = edit.type === 'name' ? edit.value.trim() : edit.value;
-  if (!value.trim() && edit.type !== 'summary') {
+  if (!value.trim() && edit.newTask) {
     if (status) toast('请先填写事项正文');
-    return !status && !edit.newTask;
+    return false;
   }
+  if (!value && edit.type === 'name') return true;
   const task = project.tasks.find(task => task.id === edit.taskId);
   const previous = edit.type === 'name' ? project.name : edit.type === 'summary' ? project.summary : task?.title;
   if (value === previous && !status) return true;
@@ -390,43 +391,52 @@ function persistEditor(status) {
   if (okay) edit.newTask = null;
   return okay;
 }
-function finishEditor(status) {
-  if (!editing) return;
-  const edit = editing;
-  if (!persistEditor(status) && (status || edit.value.trim())) return false;
-  editing = null;clearTimeout(editTimer);
-  app.querySelector('.adding-parent')?.classList.remove('adding-parent');
-  if (edit.newTask) {
-    let group = edit.element.closest('.task-group');
-    const column = group.closest('.column');
+function hideTaskCards(taskId) {
+  for (const cardGroup of app.querySelectorAll(`.task-group[data-task-group="${CSS.escape(taskId)}"]`)) {
+    const column = cardGroup.closest('.column');
+    let group = cardGroup;
     while (group) {
       const parent = group.parentElement.closest('.task-group');
-      group.remove();
+      const children = group.querySelector(':scope > .task-children');
+      group.replaceWith(...(children?.children ?? []));
       if (!parent || parent.querySelector(':scope > .task-children > .task-group')) break;
       parent.querySelector(':scope > .task-children').remove();
       const card = parent.querySelector(':scope > .task-card');
       card.querySelector('[data-action="toggle-branch"]')?.remove();
       group = card.classList.contains('context') ? parent : null;
     }
-    if (!column.querySelector('[data-action="toggle-branch"]')) {
-      const toggle = column.querySelector('[data-action="toggle-column"]');
-      toggle.disabled = true;toggle.setAttribute('aria-expanded','false');
-      toggle.title = '展开本列所有子事项';toggle.setAttribute('aria-label',toggle.title);
-    }
-    return;
+    const toggle = column.querySelector('[data-action="toggle-column"]');
+    const expanded = Boolean(column.querySelector('[data-action="toggle-branch"][aria-expanded="true"]'));
+    toggle.disabled = !column.querySelector('[data-action="toggle-branch"]');
+    toggle.setAttribute('aria-expanded',expanded);
+    toggle.title = expanded ? '收起本列所有子事项' : '展开本列所有子事项';
+    toggle.setAttribute('aria-label',toggle.title);
   }
+}
+function finishEditor(status) {
+  if (!editing) return;
+  const edit = editing;
+  if (!persistEditor(status) && (status || !edit.newTask || edit.value.trim())) return false;
+  editing = null;clearTimeout(editTimer);
+  app.querySelector('.adding-parent')?.classList.remove('adding-parent');
+  if (edit.newTask) {hideTaskCards(edit.taskId);return;}
   const project = projectById(edit.projectId);
   const value = edit.type === 'name' ? project.name : edit.type === 'summary' ? project.summary : project.tasks.find(task => task.id === edit.taskId)?.title;
+  if (edit.type === 'task' && !value?.trim()) {
+    hideTaskCards(edit.taskId);
+    app.querySelector('.progress-value').textContent = `${progress(project).percent}%`;
+    return;
+  }
   edit.element.classList.remove('editing');edit.element.innerHTML = edit.type === 'name' ? escape(value) : markdown(value ?? '',edit.type === 'summary');renderMath(edit.element);
   if (edit.type === 'task') app.querySelectorAll(`.task-card[data-task="${CSS.escape(edit.taskId)}"] .task-content`).forEach(element => {
     if (element !== edit.element) {element.innerHTML = markdown(value ?? '');renderMath(element);}
   });
 }
-function addTask(project, parentId = null, beforeId = null, value = '') {
+function addTask(project, parentId = null, beforeId = null) {
   if (finishEditor() === false || conflict) return;
   const siblings = project.tasks.filter(task => task.parentId === parentId);
-  const draft = {id:crypto.randomUUID(),parentId,title:value,status:'todo',order:Math.max(-1,...siblings.map(task => task.order))+1};
-  editing = {type:'task',projectId:project.id,taskId:draft.id,value,newTask:draft,beforeId};
+  const draft = {id:crypto.randomUUID(),parentId,title:'',status:'todo',order:Math.max(-1,...siblings.map(task => task.order))+1};
+  editing = {type:'task',projectId:project.id,taskId:draft.id,value:draft.title,newTask:draft,beforeId};
   render();
   const card = editing.element.closest('.task-card'), pane = card.closest('.column-items');
   const bounds = pane.getBoundingClientRect(), rect = card.getBoundingClientRect();
@@ -436,7 +446,7 @@ function addTask(project, parentId = null, beforeId = null, value = '') {
 }
 function reshapeTask(project, taskId, outdent) {
   const draft = editing?.newTask?.id === taskId ? editing.newTask : null;
-  const source = draft ? {...project,tasks:[...project.tasks,{...draft,title:'新增事项'}]} : project;
+  const source = draft ? {...project,tasks:[...project.tasks,draft]} : project;
   if (draft && editing.beforeId) moveTask(source,taskId,{beforeId:editing.beforeId});
   const task = source.tasks.find(task => task.id === taskId);
   if (!task) return;
@@ -445,7 +455,7 @@ function reshapeTask(project, taskId, outdent) {
     if (task.parentId === null) {if (!draft) beginEditor('task',project,taskId);return;}
     parentId = source.tasks.find(item => item.id === task.parentId).parentId;
   } else {
-    const siblings = source.tasks.filter(item => item.parentId === task.parentId && item.status === task.status).sort((a,b) => a.order-b.order);
+    const siblings = source.tasks.filter(item => item.parentId === task.parentId && item.status === task.status && (item.id === taskId || item.title.trim())).sort((a,b) => a.order-b.order);
     parentId = siblings[siblings.findIndex(item => item.id === taskId)-1]?.id;
     if (!parentId) {if (!draft) beginEditor('task',project,taskId);return;}
   }
@@ -494,7 +504,7 @@ function showHelp() {
   dialog.innerHTML = `<header class="dialog-header"><h2>帮助</h2>${actionButton('close','关闭','close')}</header><div class="help-content">
     <h3>项目与事项</h3>
     <p>点击项目名、总体情况或事项正文即可编辑。输入自动保存，离开编辑区后渲染。每次只展开一个项目；全部项目折叠后，将鼠标移至项目栏上方，拖动出现的把手调整顺序。</p>
-    <p>事项最多三级，状态按「待办项 ↔ 进行中 ↔ 已完成」逐步切换。拖动事项左侧把手可调整同列顺序与层级，父事项会带上全部子事项。项目全部事项完成后可归档；归档、删除均需确认。</p>
+    <p>事项最多三级，状态按「待办项 ↔ 进行中 ↔ 已完成」逐步切换。拖动左侧把手可在同列排序，也可在待办和进行中之间拖到分支图标下，成为子事项。拖动会保留事项状态，并带上全部子事项。项目全部事项完成后可归档，归档和删除均需确认。</p>
     <h3>折叠、定位与搜索</h3>
     <p>事项框外的箭头展开或收起子事项，列标题旁的箭头批量控制本列层级；总体情况可单独折叠。定位按钮会展开其他列的对应事项，并在列顶端高亮。</p>
     <p>Ctrl+F 打开当前项目的搜索栏。可按列筛选、查看匹配事项数，用上下按钮或 Enter / Shift+Enter 循环跳转；点击 × 或按 Esc 关闭搜索。</p>
@@ -504,7 +514,7 @@ function showHelp() {
     <h3>快捷键</h3><table><tbody>
       <tr><th scope="row"><kbd>Ctrl + B</kbd></th><td>加粗或取消加粗选中文字；无选区时插入加粗标记</td></tr>
       <tr><th scope="row"><kbd>Ctrl + F</kbd></th><td>打开当前项目的事项搜索</td></tr>
-      <tr><th scope="row"><kbd>Enter</kbd></th><td>编辑事项时新增同级；搜索时跳到下一项</td></tr>
+      <tr><th scope="row"><kbd>Enter</kbd></th><td>保存完整正文并新增空白同级事项。搜索时跳到下一项</td></tr>
       <tr><th scope="row"><kbd>Shift + Enter</kbd></th><td>编辑事项时换行，搜索时跳到上一项</td></tr>
       <tr><th scope="row"><kbd>Tab / Shift + Tab</kbd></th><td>降低 / 提升事项层级，最多三级；空白新增项也适用</td></tr>
       <tr><th scope="row"><kbd>Ctrl + Enter</kbd></th><td>结束编辑并渲染</td></tr>
@@ -524,7 +534,7 @@ function exportBackup() {
   if (editing) {
     const project = exported.projects.find(project => project.id === editing.projectId);
     if (editing.type === 'summary') project.summary = editing.value;
-    else if (editing.value.trim()) {
+    else if (editing.value.trim() || editing.type === 'task' && !editing.newTask) {
       if (editing.type === 'name') project.name = editing.value.trim();
       else if (editing.newTask) project.tasks.push({...editing.newTask,title:editing.value});
       else project.tasks.find(task => task.id === editing.taskId).title = editing.value;
@@ -534,7 +544,7 @@ function exportBackup() {
   const link = document.createElement('a');link.href = url;link.download = `一事-备份-${new Date().toLocaleDateString('sv-SE')}.json`;link.click();setTimeout(() => URL.revokeObjectURL(url),1000);
 }
 function revealPendingChildren(project,id) {
-  const pending = descendants(project,id).filter(task => task.status === 'todo');
+  const pending = descendants(project,id).filter(task => task.status === 'todo' && task.title.trim());
   const ids = new Set(pending.map(task => task.id));
   if (!ids.size) return false;
   let changed = false;
@@ -661,7 +671,11 @@ document.addEventListener('input',event => {
     search.query = event.target.value;search.taskId = null;navigateSearch();focusSearch(start,end);return;
   }
   if (!event.target.matches('[data-inline-editor]') || !editing) return;
-  editing.value = event.target.value;fitEditor(event.target);
+  editing.value = event.target.value;
+  if (event.inputType === 'deleteByCut' && editing.type === 'task' && !editing.newTask && !editing.value.trim()) {
+    if (finishEditor() !== false) return;
+  }
+  fitEditor(event.target);
   clearTimeout(editTimer);editTimer = setTimeout(persistEditor,450);
 });
 document.addEventListener('compositionend',event => {
@@ -726,7 +740,7 @@ document.addEventListener('keydown',event => {
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       event.preventDefault();
       if (finishEditor() === false) return;
-      const siblings = project.tasks.filter(item => item.parentId === task.parentId && item.status === task.status).sort((a,b) => a.order-b.order), index = siblings.findIndex(item => item.id === task.id);
+      const siblings = project.tasks.filter(item => item.parentId === task.parentId && item.status === task.status && item.title.trim()).sort((a,b) => a.order-b.order), index = siblings.findIndex(item => item.id === task.id);
       if (event.key === 'ArrowUp' && index === 0 || event.key === 'ArrowDown' && index === siblings.length-1) return;
       change(() => moveTask(project,task.id,{beforeId:event.key === 'ArrowUp' ? siblings[index-1].id : siblings[index+2]?.id}));
       app.querySelector(`.task-card[data-task="${CSS.escape(task.id)}"]:not(.context) .drag-handle`)?.focus();return;
@@ -751,17 +765,15 @@ document.addEventListener('keydown',event => {
     if (conflict && (event.key === 'Tab' || event.key === 'Enter' && !event.shiftKey)) {event.preventDefault();toast('数据版本冲突，请先导出备份');return;}
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      const edit = editing, project = projectById(edit.projectId), cursor = event.target.selectionStart;
-      const head = edit.value.slice(0,cursor), tail = edit.value.slice(event.target.selectionEnd);
-      const parentId = edit.newTask?.parentId ?? project.tasks.find(task => task.id === edit.taskId)?.parentId ?? null;
-      if (!head.trim() && !edit.newTask) {finishEditor();addTask(project,parentId,edit.taskId);return;}
-      edit.value = head;finishEditor();
-      const siblings = project.tasks.filter(task => task.parentId === parentId).sort((a,b) => a.order-b.order);
-      addTask(project,parentId,siblings[siblings.findIndex(task => task.id === edit.taskId)+1]?.id,tail);return;
+      const edit = editing;
+      if (edit.newTask && !edit.value.trim() || finishEditor() === false) return;
+      const project = projectById(edit.projectId), task = project.tasks.find(item => item.id === edit.taskId);
+      const siblings = project.tasks.filter(item => item.parentId === task.parentId).sort((a,b) => a.order-b.order);
+      addTask(project,task.parentId,siblings[siblings.indexOf(task)+1]?.id);return;
     }
     if (event.key === 'Tab') {
       event.preventDefault();const edit = editing, project = projectById(edit.projectId);
-      if (!edit.newTask || edit.value.trim()) {if (finishEditor() === false) return;}
+      if (!edit.newTask || edit.value.trim()) {if (finishEditor() === false || !edit.value.trim()) return;}
       reshapeTask(project,edit.taskId,event.shiftKey);return;
     }
   } else if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('[role="button"][data-action]')) {event.preventDefault();handleAction(event.target);}
@@ -788,14 +800,17 @@ function dragTarget(x,y) {
     return {element:project,kind:before ? 'project-drop-before' : 'project-drop-after',options:{beforeId:before ? projects[index].id : projects[index+1]?.id}};
   }
   const column = target?.closest('[data-column]');
-  if (!dragged || column?.dataset.project !== dragged.projectId || column.dataset.column !== dragged.status) return null;
+  if (!dragged || column?.dataset.project !== dragged.projectId) return null;
   const group = target.closest('[data-task-group]');
   if (group && dragged.blockedIds.has(group.dataset.taskGroup)) return null;
   const nest = target.closest('[data-nest]'), card = target.closest('.task-card');
+  if (column.dataset.column !== dragged.status && (!nest || column.dataset.column === 'done' || dragged.status === 'done')) return null;
   if (card?.dataset.task === dragged.id) return null;
   if (nest) return {element:nest,kind:'over',options:{parentId:nest.dataset.nest}};
   if (!card) return {element:column,kind:'drag-over',options:{}};
   const project = projectById(dragged.projectId), task = project.tasks.find(task => task.id === card.dataset.task);
+  if (dragged.status !== 'done' && task.parentId !== dragged.parentId &&
+      project.tasks.some(parent => parent.id === task.parentId && parent.status === 'done')) return null;
   const rect = card.getBoundingClientRect();
   const before = y < rect.top + rect.height/2;
   const siblings = project.tasks.filter(item => item.parentId === task.parentId && item.id !== dragged.id).sort((a,b) => a.order-b.order);
@@ -830,9 +845,13 @@ document.addEventListener('pointerdown',event => {
     Object.assign(dragged,{kind:'project',id:handle.dataset.project});
   } else {
     const card = handle.closest('.task-card');
-    const blockedIds = new Set([card.dataset.task,...descendants(projectById(card.dataset.project),card.dataset.task).map(task => task.id)]);
-    Object.assign(dragged,{id:card.dataset.task,projectId:card.dataset.project,status:card.dataset.columnStatus,blockedIds});
-    app.querySelectorAll('.task-card').forEach(element => {if (blockedIds.has(element.dataset.task)) element.classList.add('drag-blocked');});
+    const {task:id,project:projectId,columnStatus:status} = card.dataset;
+    const project = projectById(projectId), task = project.tasks.find(item => item.id === id);
+    const blockedIds = new Set([id,...descendants(project,id).map(item => item.id)]);
+    Object.assign(dragged,{id,projectId,status,parentId:task.parentId,blockedIds});
+    app.querySelectorAll('.task-card').forEach(element => {
+      if (blockedIds.has(element.dataset.task) || (element.dataset.columnStatus === 'done') !== (status === 'done')) element.classList.add('drag-blocked');
+    });
   }
   handle.setPointerCapture(event.pointerId);
 });
@@ -848,12 +867,12 @@ document.addEventListener('pointermove',event => {
 });
 document.addEventListener('pointerup',event => {
   if (!dragged || event.pointerId !== dragged.pointerId) return;
-  const {kind,id,projectId,active} = dragged;
+  const {kind,id,projectId,status,active} = dragged;
   const target = active ? dragTarget(event.clientX,event.clientY) : null;
   clearDrag();
   if (!active) return;
   event.preventDefault();ignoreDragClick = true;setTimeout(() => {ignoreDragClick = false;},0);
-  if (target) change(() => kind === 'project' ? moveProject(state,id,target.options.beforeId) : moveTask(projectById(projectId),id,target.options));
+  if (target) change(() => kind === 'project' ? moveProject(state,id,target.options.beforeId) : moveTask(projectById(projectId),id,{...target.options,status}));
 });
 for (const name of ['pointercancel','lostpointercapture']) document.addEventListener(name,event => {if (event.pointerId === dragged?.pointerId) clearDrag();});
 window.addEventListener('blur',clearDrag);
@@ -863,6 +882,14 @@ try {
   if (!response.ok) throw new Error('无法读取本地数据');
   const data = await response.json();validateState(data.state);
   state = data.state;revision = data.revision;activeId = visibleProjects()[0]?.id ?? null;
+  for (const project of state.projects) {
+    for (const status of Object.keys(statuses)) {
+      const folds = branchFolds(project.id,status);
+      for (const {task,children} of flatNodes(projectColumn(project,status))) {
+        if (children.length) folds.add(task.id);
+      }
+    }
+  }
   await installNativeDownloadFeedback(toast);
   render();
   await installNativeCloseGuard({persistEditor,isEmptyDraft:() => Boolean(editing?.newTask && editing.value === ''),save,isPending:() => dirty || saving,hasError:() => Boolean(saveError) || conflict,onError:error => toast(error.message),chooseCloseAction});

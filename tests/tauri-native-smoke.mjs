@@ -172,6 +172,10 @@ try {
   assert.equal(await page.locator('.column.todo .task-check').count(),0);
   assert.ok((await page.locator('.overview-header h2,.column-heading').evaluateAll(elements => elements.map(element => getComputedStyle(element).fontSize))).every(value => value==='16px'));
   passed('三列顺序、标题字号、状态按钮及简洁布局保持一致');
+  assert.ok(await card('design').isVisible());
+  assert.equal(await page.locator('.column .task-children .task-card:visible').count(),0);
+  assert.equal(await page.locator('.column [data-action="toggle-column"][aria-expanded="false"]:enabled').count(),3);
+  passed('启动时各列仅显示一级事项，子事项默认收起且各列可展开');
   await page.locator('[data-action="help"]').click();
   assert.equal(await page.locator('dialog[open]').count(),1);
   assert.ok((await page.locator('dialog').boundingBox()).width>=600);
@@ -225,7 +229,10 @@ try {
   const projectId = (await snapshot()).state.projects.find(project => project.name==='原生验收').id;
   const currentProject = async () => (await snapshot()).state.projects.find(project => project.id===projectId);
   await page.locator('.column.todo .add-task').click();
-  await editor().fill('一级事项');await editor().press('Enter');
+  await editor().fill('一级事项');
+  await editor().evaluate(input => input.setSelectionRange(2,2));
+  await editor().press('Enter');
+  assert.equal(await editor().inputValue(),'');
   await editor().fill('二级事项');await editor().press('Tab');await editor().press('Enter');
   await editor().fill('三级事项');await editor().press('Tab');await finish();
   let project = await currentProject();
@@ -233,6 +240,7 @@ try {
   const first = project.tasks.find(task => task.parentId===null).id;
   const second = project.tasks.find(task => task.parentId===first).id;
   const third = project.tasks.find(task => task.parentId===second).id;
+  assert.equal(project.tasks.find(task => task.id===first).title,'一级事项');
   assert.equal(await page.locator('dialog[open]').count(),0);
   await card(third).locator('.task-content').click();await editor().press('Shift+Tab');await finish();
   assert.equal((await currentProject()).tasks.find(task => task.id===third).parentId,first);
@@ -260,6 +268,20 @@ try {
   await card(first).locator('.task-content').click();
   await editor().press('Control+Shift+Enter');await saved();
   assert.ok((await currentProject()).tasks.filter(task => [first,second,third].includes(task.id)).every(task => task.status==='doing'));
+  await pointerDrag(third,target,{nest:true,ratio:.5});
+  assert.equal((await currentProject()).tasks.find(task => task.id===third).parentId,target);
+  assert.equal((await currentProject()).tasks.find(task => task.id===third).status,'doing');
+  await pointerDrag(third,second,{nest:true,ratio:.5});
+  await card(third).locator('.task-content').click();
+  await editor().evaluate(input => {
+    input.value = '';
+    input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'deleteByCut'}));
+  });
+  assert.equal(await editor().count(),0);
+  await saved();
+  assert.equal((await currentProject()).tasks.find(task => task.id===third).title,'');
+  assert.equal(await card(third).count(),0);
+  passed('原生事项可跨列调整父项，剪空后立即从列中隐藏并保存空正文');
   const beforeDraft = await snapshot();
   for (const [parentId,dismiss] of [[first,'Escape'],[first,'click'],[second,'Escape'],[second,'click']]) {
     await card(parentId).locator('[data-action="add-task"]').click();
@@ -285,7 +307,7 @@ try {
   await card(first).locator('.task-content').click();
   await editor().press('Control+Shift+Enter');await saved();
   assert.ok((await currentProject()).tasks.filter(task => [first,second,third].includes(task.id)).every(task => task.status==='todo'));
-  passed('禁止跨列拖动，编辑时 Ctrl+Shift+Enter 双向切换待办与进行中并连带后代');
+  passed('跨列空白处不能放置，Ctrl+Shift+Enter 双向切换待办与进行中并连带后代');
   await page.locator('[data-action="delete-project"]').click();
   await page.locator('dialog .secondary[data-action="close"]').click();
   assert.ok(await currentProject());
@@ -322,6 +344,7 @@ try {
   await pointerDrag('todo-20','todo-19');
   const afterDrag = await offsets();assert.equal(afterDrag[1],180);assert.equal(afterDrag[2],180);assert.ok(afterDrag[0]>0);
   passed('三列独立滚动且隐藏滚动条，拖动渲染保留滚动位置');
+  assert.equal(await card('blocked-child').isVisible(),false);
   await card('blocked-root').locator('[data-action="complete"]').click();
   await page.locator('.pending-attention[data-task="blocked-child"]').waitFor();
   assert.equal((await snapshot()).state.projects[0].tasks.find(task => task.id==='blocked-root').status,'doing');

@@ -64,12 +64,33 @@ try {
     task('doing-target','Needle normal','doing',1,'shared-second'),
     task('done-target','Needle normal','done',2,'shared-second'),
     task('done-direct','直接完成子事项','done',1,'shared-root'),
-  ]},{id:'other-project',name:'其他项目',summary:'',createdAt,archivedAt:null,tasks:[task('other-needle','Needle 不属于当前项目','todo',0)]}];
+  ]},{id:'other-project',name:'其他项目',summary:'',createdAt,archivedAt:null,tasks:[
+    task('other-needle','Needle 不属于当前项目','todo',0),
+    task('other-child','其他项目的子事项','todo',0,'other-needle'),
+  ]}];
   assert.equal((await fetch(`${origin}/api/state`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(fixture)})).status,200);
   await page.goto(origin);await saved();
   await page.emulateMedia({reducedMotion:'reduce'});
   const beforeUi = await snapshot();
 
+  for (const status of ['todo','doing','done']) {
+    const branches = page.locator(`.column.${status} [data-action="toggle-branch"]`);
+    assert.ok(await branches.count() >= 2);
+    assert.ok((await branches.evaluateAll(elements => elements.map(element => element.getAttribute('aria-expanded')))).every(value => value === 'false'));
+    assert.equal(await bulk(status).getAttribute('aria-expanded'),'false');
+    assert.equal(await card(status,'shared-root').isVisible(),true);
+    assert.equal(await card(status,'shared-second').isVisible(),false);
+  }
+  await page.locator('[data-action="toggle"][data-project="other-project"]').click();
+  assert.equal(await card('todo','other-needle').isVisible(),true);
+  assert.equal(await branch('todo','other-needle').getAttribute('aria-expanded'),'false');
+  assert.equal(await card('todo','other-child').isVisible(),false);
+  await page.locator('[data-action="toggle"][data-project="workspace-tests"]').click();
+  assert.deepEqual(await snapshot(),beforeUi);
+  passed('启动时三列分支均默认折叠，首次展开其他项目也只显示一级事项');
+
+  await bulk('todo').click();
+  await branch('doing','shared-root').click();
   for (const [parent,peer] of [['todo-root','todo-fill-0'],['todo-second','todo-peer']]) {
     const button = await branch('todo',parent).boundingBox(), box = await card('todo',parent).boundingBox();
     const text = await card('todo',parent).locator('.task-content').boundingBox(), peerText = await card('todo',peer).locator('.task-content').boundingBox();
