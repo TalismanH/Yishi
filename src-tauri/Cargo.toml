@@ -1,6 +1,6 @@
 [package]
 name = "yishi-desktop"
-version = "1.0.0"
+version = "1.1.0"
 description = "一事桌面待办开发工程"
 license = "Apache-2.0"
 edition = "2021"

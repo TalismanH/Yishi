@@ -24,6 +24,7 @@ await page.addInitScript(() => {
   window.__TAURI__ = {
     core:{invoke:async (command,args) => {
       if (command === 'hide_to_tray') {runtime.hidden++;return;}
+      if (command === 'set_language') {runtime.language=args.language;return;}
       if (command !== 'load_workspace' && command !== 'save_workspace') throw new Error(`Unexpected native command: ${command}`);
       const response = await fetch('/api/state',command === 'load_workspace' ? undefined : {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(args)});
       const payload = await response.json();

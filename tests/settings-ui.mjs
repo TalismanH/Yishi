@@ -128,13 +128,13 @@ try {
     assert.ok(actual.textContrast >= 4.5,`${selected}: text contrast ${actual.textContrast}`);
     assert.ok(actual.buttonContrast >= 4.5,`${selected}: button contrast ${actual.buttonContrast}`);
     pageColors.add(actual.page);
-    assert.deepEqual(JSON.parse(await appearance()),{font:'system',size:14,palette:selected});
+    assert.deepEqual(JSON.parse(await appearance()),{font:'system',size:14,palette:selected,language:'zh'});
     await page.reload();await saved();await expectAppearance('system',14);await openSettings();
     assert.equal(await palette().inputValue(),selected);assert.deepEqual(await colors(),actual);
   }
   assert.equal(pageColors.size,6);
   await font().selectOption('smiley');await size().selectOption('18');
-  assert.deepEqual(JSON.parse(await appearance()),{font:'smiley',size:18,palette:'clay'});
+  assert.deepEqual(JSON.parse(await appearance()),{font:'smiley',size:18,palette:'clay',language:'zh'});
   assert.equal((await colors()).palette,'clay');
   await font().selectOption('system');await size().selectOption('14');await palette().selectOption('default');
   assert.deepEqual(await colors(),defaultColors);assert.deepEqual(await snapshot(),before);
@@ -142,7 +142,7 @@ try {
 
   await font().selectOption('smiley');await size().selectOption('18');
   const changed = await expectAppearance('smiley',18);await expectSmileyLoaded();
-  assert.deepEqual(JSON.parse(await appearance()),{font:'smiley',size:18,palette:'default'});
+  assert.deepEqual(JSON.parse(await appearance()),{font:'smiley',size:18,palette:'default',language:'zh'});
   for (const key of ['projectSize','columnSize','buttonSize']) assert.equal(changed[key]-baseline[key],4,key);
   await page.screenshot({path:path.resolve('test-results/settings.png')});
   await closeDialog();
@@ -174,7 +174,7 @@ try {
   const narrowBounds = await page.locator('dialog').boundingBox();
   assert.ok(narrowBounds.x >= 0 && narrowBounds.x+narrowBounds.width <= 421,JSON.stringify(narrowBounds));
   await font().selectOption('system');await expectAppearance('system',24);
-  assert.deepEqual(JSON.parse(await appearance()),{font:'system',size:24,palette:'default'});
+  assert.deepEqual(JSON.parse(await appearance()),{font:'system',size:24,palette:'default',language:'zh'});
   await closeDialog();assert.deepEqual(await snapshot(),before);
   await page.setViewportSize({width:1440,height:1000});
   passed('字体和字号重载后保持，12px/24px边界及窄窗口布局正常，切回系统字体即刻生效且不修改业务数据');
@@ -194,7 +194,7 @@ try {
   await page.evaluate(() => localStorage.setItem('yishi.appearance',JSON.stringify({font:'smiley',size:18})));
   await page.reload();await saved();await expectAppearance('smiley',18);await openSettings();
   assert.equal(await palette().inputValue(),'default');await palette().selectOption('mist');
-  assert.deepEqual(JSON.parse(await appearance()),{font:'smiley',size:18,palette:'mist'});await closeDialog();
+  assert.deepEqual(JSON.parse(await appearance()),{font:'smiley',size:18,palette:'mist',language:'zh'});await closeDialog();
   passed('无效配色回退默认并保留有效字体字号，旧版外观偏好兼容且可保存新配色');
 
   await page.evaluate(() => localStorage.removeItem('yishi.appearance'));

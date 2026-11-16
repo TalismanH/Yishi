@@ -11,8 +11,8 @@ const {chromium} = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(pr
 assert.ok(process.env.OBSIDIAN_EXE, 'Set OBSIDIAN_EXE to the desktop executable');
 const directory = await mkdtemp(path.join(tmpdir(), 'yishi-obsidian-'));
 const vault = path.join(directory, 'vault'), profile = path.join(directory, 'profile');
-const config = path.join(vault, '.obsidian'), data = path.join(vault, '一事');
-await Promise.all([mkdir(config, {recursive: true}), mkdir(profile), mkdir(data, {recursive: true})]);
+const config = path.join(vault, '.obsidian'), data = path.join(vault, 'Yishi'), legacyData = path.join(vault,'一事');
+await Promise.all([mkdir(config, {recursive: true}), mkdir(profile), mkdir(legacyData, {recursive: true})]);
 if (process.env.OBSIDIAN_ASAR) await cp(process.env.OBSIDIAN_ASAR, path.join(profile, path.basename(process.env.OBSIDIAN_ASAR)));
 await cp(path.resolve('dist/yishi'), path.join(config, 'plugins/yishi'), {recursive: true});
 const seed = createInitialState();
@@ -21,7 +21,7 @@ await Promise.all([
   writeFile(path.join(profile, 'obsidian.json'), JSON.stringify({vaults: {'0123456789abcdef': {path: vault, ts: Date.now(), open: true}}, cli: true})),
   writeFile(path.join(config, 'community-plugins.json'), '["yishi"]'),
   writeFile(path.join(config, 'app.json'), '{"communityPluginEnabled":true}'),
-  writeFile(path.join(data, 'workspace.json'), JSON.stringify({state: seed, revision: 0})),
+  writeFile(path.join(legacyData, 'workspace.json'), JSON.stringify({state: seed, revision: 0})),
   writeFile(path.join(vault, '宿主笔记.md'), '# 普通笔记\n\n宿主样式与快捷键验证。'),
 ]);
 let browser, child, checks = 0;
@@ -71,6 +71,29 @@ try {
   assert.equal(await root.evaluate(element => getComputedStyle(element).fontSize), '14px');
   assert.ok(await root.locator('.project-body').evaluate(element => parseFloat(getComputedStyle(element).paddingLeft) >= 16));
   passed('真实 Obsidian 加载插件、三列工作台、公式和容器高度正确');
+
+  assert.deepEqual(await disk(),{state:seed,revision:0});
+  assert.deepEqual(JSON.parse(await readFile(path.join(legacyData,'workspace.json'),'utf8')),{state:seed,revision:0});
+  assert.ok((await readdir(path.join(data,'backups'))).some(name=>name.startsWith('migration-source-')));
+  passed('旧一事目录自动迁移到 Yishi，原目录和 revision 保留');
+
+  await root.locator('[data-action="settings"]').click();
+  await root.locator('[data-setting-language]').selectOption('en');
+  await root.getByRole('heading',{name:'Settings',exact:true}).waitFor();
+  await page.waitForFunction(()=>app.commands.commands['yishi:open'].name==='Yishi: Open workbench');
+  assert.equal(await root.locator('[data-view=active]').textContent(),'Projects');
+  assert.equal(await root.locator('.project-name').textContent(),seed.projects[0].name);
+  await root.locator('.dialog-footer [data-action=close]').click();
+  await root.locator('[data-action=help]').click();
+  assert.doesNotMatch(await root.locator('.help-content').innerText(),/\p{Script=Han}/u);
+  await root.locator('.dialog-footer [data-action=close]').click();
+  const nativeLabels=await page.evaluate(()=>{const p=app.plugins.plugins.yishi;p.settingTab.display();return [...p.settingTab.containerEl.querySelectorAll('.setting-item-name,.setting-item-description')].map(e=>e.textContent);});
+  assert.doesNotMatch(nativeLabels.join('\n'),/\p{Script=Han}/u);
+  assert.deepEqual(await disk(),{state:seed,revision:0});
+  await page.evaluate(()=>app.plugins.plugins.yishi.setLanguage('zh'));
+  await root.getByRole('button',{name:'项目',exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>app.commands.commands['yishi:open'].name),'Yishi: 打开工作台');
+  passed('工作台和原生插件设置双向切换语言，用户内容与快捷键注册保留');
 
   const firstTask = seed.projects[0].tasks.find(task => task.parentId === null && task.status === 'todo');
   const task = () => root.locator(`.task-card[data-task="${firstTask.id}"]:not(.context) .task-content`);
@@ -183,7 +206,7 @@ try {
   await confirmImport();
   await saved();
   assert.equal((await disk()).state.projects[0].tasks.find(task => task.id === firstTask.id).title, '关闭前尚未防抖保存的内容');
-  assert.ok((await readdir(path.join(data, 'backups'))).some(name => name.startsWith('导入前备份')));
+  assert.ok((await readdir(path.join(data, 'backups'))).some(name => name.startsWith('before-import')));
   passed('恢复副本可确认导入，覆盖前另存永久备份');
 
   const external = await disk();
@@ -198,7 +221,7 @@ try {
   await saved();
   assert.match(await root.locator('.overview-content').textContent(), /外部同步修改/);
   const exports = await readdir(path.join(data, 'backups'));
-  const conflictExport = await Promise.all(exports.filter(name => name.startsWith('一事-备份')).map(name => readFile(path.join(data, 'backups', name), 'utf8')));
+  const conflictExport = await Promise.all(exports.filter(name => name.startsWith('Yishi-backup')).map(name => readFile(path.join(data, 'backups', name), 'utf8')));
   assert.ok(conflictExport.some(text => text.includes('冲突窗口中必须保留的编辑')));
   passed('同 revision 外部修改触发冲突，重载前自动导出冲突中的编辑');
 

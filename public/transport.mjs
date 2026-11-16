@@ -1,4 +1,5 @@
 import { createInitialState, validateState } from './model.mjs';
+import {translate} from './i18n.mjs';
 
 const jsonResponse = (value, status = 200) => new Response(JSON.stringify(value), {
   status, headers: { 'Content-Type': 'application/json' },
@@ -27,12 +28,12 @@ export async function workspaceRequest(method = 'GET', payload) {
   }
 }
 
-export async function installNativeDownloadFeedback(notify, native = globalThis.window?.__TAURI__) {
+export async function installNativeDownloadFeedback(notify, native = globalThis.window?.__TAURI__, getLanguage = () => 'zh') {
   if (!native) return;
   return native.event.listen('backup-download-finished', ({payload}) => {
     notify(payload.success
-      ? payload.path ? `备份已导出至：${payload.path}` : '备份已导出'
-      : '备份导出失败，请重试');
+      ? payload.path ? translate(getLanguage(),`备份已导出至：${payload.path}`,`Backup exported to: ${payload.path}`) : translate(getLanguage(),'备份已导出','Backup exported.')
+      : translate(getLanguage(),'备份导出失败，请重试','Backup export failed. Please retry.'));
   });
 }
 

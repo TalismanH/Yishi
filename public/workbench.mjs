@@ -1,3 +1,4 @@
+import {normalizeLanguage, translate, translateMarkup, localizeError} from './i18n.mjs';
 import {validateState, depthOf, descendants, moveTask, moveProject, setTaskStatus, removeTask, progress, canArchive, projectColumn} from './model.mjs';
 
 export async function mountWorkbench(container, options) {
@@ -47,7 +48,7 @@ export async function mountWorkbench(container, options) {
     up:'<path d="m5 15 7-7 7 7"/>',
     settings:'<path d="M4 7h9m4 0h3M4 17h3m4 0h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
   };
-  const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]}</svg>`;
+  const icon = name => ui`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]}</svg>`;
   const escape = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const statuses = {todo:'待办项',doing:'进行中',done:'已完成'};
   const app = element('app','div');
@@ -61,21 +62,40 @@ export async function mountWorkbench(container, options) {
   const search = {open:false,projectId:null,query:'',scope:'all',taskId:null};
   const fontFamilies = {system:'"Segoe UI","Microsoft YaHei UI",sans-serif',smiley:'"Smiley Sans","Segoe UI","Microsoft YaHei UI",sans-serif'};
   const palettes = {default:'默认配色',mist:'莫兰迪 · 雾蓝',rose:'莫兰迪 · 豆沙',sage:'莫兰迪 · 鼠尾草',oat:'莫兰迪 · 燕麦',lavender:'莫兰迪 · 灰紫',clay:'莫兰迪 · 陶土'};
-  const appearance = {font:'system',size:14,palette:'default'};
+  const appearance = {font:'system',size:14,palette:'default',language:'zh'};
+  const t = (chinese, english) => translate(appearance.language, chinese, english);
+  const ui = (strings, ...values) => translateMarkup(appearance.language, strings, values);
   try {
     const saved = JSON.parse(storage.getItem('yishi.appearance') ?? '{}');
+    appearance.language = normalizeLanguage(saved?.language);
     if (saved?.font === 'system' || saved?.font === 'smiley') appearance.font = saved.font;
     if (Number.isInteger(saved?.size) && saved.size >= 12 && saved.size <= 24) appearance.size = saved.size;
     if (typeof saved?.palette === 'string' && Object.hasOwn(palettes,saved.palette)) appearance.palette = saved.palette;
   } catch {}
   function applyAppearance() {
     const root = options.appearanceRoot ?? container;
+    root.lang = appearance.language === 'en' ? 'en' : 'zh-CN';
     root.dataset.font = appearance.font;
     root.dataset.palette = appearance.palette;
     root.style.setProperty('--ui-font-family',fontFamilies[appearance.font]);
     root.style.setProperty('--ui-font-size',`${appearance.size}px`);
   }
   applyAppearance();
+  async function setLanguage(value) {
+    const language = normalizeLanguage(value);
+    if (language === appearance.language) return true;
+    if (state && finishEditor() === false) return false;
+    const settingsOpen = dialog.open && dialog.classList.contains('dialog-settings');
+    appearance.language = language;
+    applyAppearance();
+    try {storage.setItem('yishi.appearance',JSON.stringify(appearance));}
+    catch {toast('无法记住外观设置，本次修改仍然生效');}
+    if (state) render();
+    if (settingsOpen) {showSettings();dialog.querySelector('[data-setting-language]')?.focus();}
+    try {await options.onLanguageChange?.(language);}
+    catch (error) {toast(error.message || '无法切换界面语言，请重试');options.onError?.(error);}
+    return true;
+  }
   function branchFolds(projectId,status) {
     const key = `${projectId}:${status}`;
     if (!collapsedBranches.has(key)) collapsedBranches.set(key,new Set());
@@ -159,7 +179,7 @@ export async function mountWorkbench(container, options) {
   function toast(message) {
     const element = toastElement;
     if (disposed) return;
-    element.textContent = message; element.classList.add('visible');
+    element.textContent = t(localizeError(message, appearance.language)); element.classList.add('visible');
     clearTimeout(toastTimer); toastTimer = setTimeout(() => element.classList.remove('visible'),3500);
   }
 
@@ -171,8 +191,8 @@ export async function mountWorkbench(container, options) {
     element.dataset.state = saveError ? 'error' : saving || dirty ? 'saving' : 'saved';
     element.hidden = !saveError;
     element.innerHTML = saveError ? icon('undo') : '';
-    element.title = saveError;
-    element.setAttribute('aria-label',saveError || '重试保存');
+    element.title = localizeError(saveError, appearance.language);
+    element.setAttribute('aria-label',saveError ? localizeError(saveError, appearance.language) : t('重试保存'));
   }
 
   function save() {
@@ -211,9 +231,9 @@ export async function mountWorkbench(container, options) {
 
   const projectById = id => state.projects.find(project => project.id === id);
   const visibleProjects = () => state.projects.filter(project => view === 'archived' ? project.archivedAt : !project.archivedAt);
-  const taskName = task => task.title.split('\n')[0].replace(/[#*`_$]/g,'').slice(0,35).trim() || '空事项';
+  const taskName = task => task.title.split('\n')[0].replace(/[#*`_$]/g,'').slice(0,35).trim() || t('空事项');
   function actionButton(action, title, name, attributes = '') {
-    return `<button type="button" class="icon-button" data-action="${action}" aria-label="${escape(title)}" title="${escape(title)}" ${attributes}>${icon(name)}</button>`;
+    return ui`<button type="button" class="icon-button" data-action="${action}" aria-label="${escape(t(title))}" title="${escape(t(title))}" ${attributes}>${icon(name)}</button>`;
   }
 
   function editable(type, project, value, taskId = '') {
@@ -221,7 +241,7 @@ export async function mountWorkbench(container, options) {
     const attrs = `data-project="${escape(project.id)}" ${taskId ? `data-task="${escape(taskId)}"` : ''}`;
     const action = type === 'task' ? 'edit-task' : type === 'summary' ? 'edit-summary' : 'edit-name';
     const label = type === 'task' ? '编辑事项' : type === 'summary' ? '编辑总体情况' : '编辑项目名称';
-    return `<div class="${className} ${type !== 'name' ? 'markdown' : ''}" ${!project.archivedAt ? `data-action="${action}" role="button" tabindex="0" aria-label="${label}"` : ''} ${attrs}>${type === 'name' ? escape(value) : markdown(value,type === 'summary')}</div>`;
+    return ui`<div class="${className} ${type !== 'name' ? 'markdown' : ''}" ${!project.archivedAt ? `data-action="${action}" role="button" tabindex="0" aria-label="${t(label)}"` : ''} ${attrs}>${type === 'name' ? escape(value) : markdown(value,type === 'summary')}</div>`;
   }
 
   function taskHTML(node, project, status) {
@@ -229,31 +249,32 @@ export async function mountWorkbench(container, options) {
     const level = depthOf(project, task.id), readonly = Boolean(project.archivedAt);
     const attrs = `data-project="${escape(project.id)}" data-task="${escape(task.id)}"`;
     const folded = branchFolds(project.id,status).has(task.id);
-    return `<div class="task-group" data-task-group="${escape(task.id)}">
+    return ui`<div class="task-group" data-task-group="${escape(task.id)}">
       <article class="task-card ${context ? 'context' : ''} ${status === 'todo' && editing?.projectId === project.id && editing.newTask?.parentId === task.id ? 'adding-parent' : ''} ${task.status === 'done' && !context ? 'completed' : ''} ${search.open && search.projectId === project.id && search.taskId === task.id && !context ? 'search-hit' : ''}" ${attrs} data-column-status="${status}">
         ${children.length ? actionButton('toggle-branch',folded ? '展开子事项' : '收起子事项','chevron',`${attrs} data-status="${status}" aria-expanded="${!folded}"`) : ''}
-        <div class="task-main">${context ? icon('branch') : `${!readonly ? `<span class="drag-handle" role="button" tabindex="0" aria-label="拖动事项：${escape(taskName(task))}" title="拖动；↑↓调整顺序">${icon('grip')}</span>` : ''}${task.status !== 'todo' ? `<button type="button" class="task-check ${task.status === 'done' ? 'checked' : ''}" data-action="complete" ${attrs} aria-label="${task.status === 'done' ? '恢复进行中' : '完成事项'}" title="${task.status === 'done' ? '恢复进行中' : '完成事项'}" ${readonly ? 'disabled' : ''}>${task.status === 'done' ? icon('check') : ''}</button>` : ''}`}${editable('task',project,task.title,task.id)}</div>
+        <div class="task-main">${context ? icon('branch') : `${!readonly ? ui`<span class="drag-handle" role="button" tabindex="0" aria-label="拖动事项：${escape(taskName(task))}" title="拖动；↑↓调整顺序">${icon('grip')}</span>` : ''}${task.status !== 'todo' ? ui`<button type="button" class="task-check ${task.status === 'done' ? 'checked' : ''}" data-action="complete" ${attrs} aria-label="${t(task.status === 'done' ? '恢复进行中' : '完成事项')}" title="${t(task.status === 'done' ? '恢复进行中' : '完成事项')}" ${readonly ? 'disabled' : ''}>${task.status === 'done' ? icon('check') : ''}</button>` : ''}`}${editable('task',project,task.title,task.id)}</div>
         <div class="task-actions">${level < 3 ? actionButton('locate-task','定位其他列中的同一事项','locate',attrs) : ''}${!context && !readonly ? `${task.status === 'todo' ? actionButton('status','开始办理','play',`${attrs} data-status="doing"`) : task.status === 'doing' ? actionButton('status','移回待办','pause',`${attrs} data-status="todo"`) : ''}${level < 3 && task.status !== 'done' ? actionButton('add-task','新增子事项','plus',`${attrs} data-parent="${escape(task.id)}"`) : ''}${actionButton('delete-task','删除事项','close',attrs)}` : ''}</div>
-        ${!readonly && !context && level < 3 ? `<div class="drop-nest" data-nest="${escape(task.id)}" aria-label="作为子事项" title="作为子事项">${icon('branch')}</div>` : ''}
-      </article>${children.length ? `<div class="task-children" ${folded ? 'hidden' : ''}>${children.map(child => taskHTML(child,project,status)).join('')}</div>` : ''}
+        ${!readonly && !context && level < 3 ? ui`<div class="drop-nest" data-nest="${escape(task.id)}" aria-label="作为子事项" title="作为子事项">${icon('branch')}</div>` : ''}
+      </article>${children.length ? ui`<div class="task-children" ${folded ? 'hidden' : ''}>${children.map(child => taskHTML(child,project,status)).join('')}</div>` : ''}
     </div>`;
   }
   function columnHTML(project,status,label) {
+    label = t(label);
     const nodes = projectColumn(project,status,editing?.newTask?.id), branches = flatNodes(nodes).filter(node => node.children.length);
     const expanded = branches.some(node => !branchFolds(project.id,status).has(node.task.id)), id = escape(project.id);
-    return `<section class="column ${status}" data-column="${status}" data-project="${id}" aria-label="${label}"><h2 class="column-heading"><span class="status-dot"></span>${label}${actionButton('toggle-column',expanded ? '收起本列所有子事项' : '展开本列所有子事项','chevron',`data-project="${id}" data-status="${status}" aria-expanded="${expanded}" ${branches.length ? '' : 'disabled'}`)}</h2><div class="column-items" tabindex="0" role="region" aria-label="${label}列表">${nodes.map(node => taskHTML(node,project,status)).join('')}${!project.archivedAt && status === 'todo' ? `<button class="add-task" data-action="add-task" data-project="${id}" aria-label="新增待办" title="新增待办">${icon('plus')}</button>` : ''}</div></section>`;
+    return ui`<section class="column ${status}" data-column="${status}" data-project="${id}" aria-label="${t(label)}"><h2 class="column-heading"><span class="status-dot"></span>${label}${actionButton('toggle-column',expanded ? '收起本列所有子事项' : '展开本列所有子事项','chevron',`data-project="${id}" data-status="${status}" aria-expanded="${expanded}" ${branches.length ? '' : 'disabled'}`)}</h2><div class="column-items" tabindex="0" role="region" aria-label="${label}列表">${nodes.map(node => taskHTML(node,project,status)).join('')}${!project.archivedAt && status === 'todo' ? ui`<button class="add-task" data-action="add-task" data-project="${id}" aria-label="新增待办" title="新增待办">${icon('plus')}</button>` : ''}</div></section>`;
   }
 
   function projectHTML(project) {
     const id = escape(project.id);
-    const handle = activeId === null ? `<button type="button" class="icon-button project-sort-handle" data-project="${id}" aria-label="排序项目：${escape(project.name)}" title="拖动调整项目顺序">${icon('grip')}</button>` : '';
-    if (activeId !== project.id) return `<section class="project collapsed" id="project-${id}" data-project="${id}">${handle}<button class="project-toggle" data-action="toggle" data-project="${id}" aria-expanded="false" title="${escape(project.name)}">${icon('chevron')}<span class="project-title">${escape(project.name)}</span></button></section>`;
+    const handle = activeId === null ? ui`<button type="button" class="icon-button project-sort-handle" data-project="${id}" aria-label="排序项目：${escape(project.name)}" title="拖动调整项目顺序">${icon('grip')}</button>` : '';
+    if (activeId !== project.id) return ui`<section class="project collapsed" id="project-${id}" data-project="${id}">${handle}<button class="project-toggle" data-action="toggle" data-project="${id}" aria-expanded="false" title="${escape(project.name)}">${icon('chevron')}<span class="project-title">${escape(project.name)}</span></button></section>`;
     const stats = progress(project);
     const draft = editing?.newTask && editing.projectId === project.id ? editing.newTask : null;
     const before = draft && project.tasks.find(task => task.id === editing.beforeId);
     const display = draft ? {...project,tasks:[...project.tasks,{...draft,order:before ? before.order - 0.5 : draft.order}]} : project;
-    return `<section class="project expanded" id="project-${id}" data-project="${id}">
-      <header class="project-header">${actionButton('toggle','收起项目','down',`data-project="${id}" aria-expanded="true"`)}${editable('name',project,project.name)}<div class="project-tools">${project.archivedAt ? `<button class="plain-button" data-action="restore" data-project="${id}">${icon('undo')} 恢复项目</button>` : actionButton('archive','归档','archive',`data-project="${id}"`)}${actionButton('delete-project','删除项目','trash',`data-project="${id}"`)}</div></header>
+    return ui`<section class="project expanded" id="project-${id}" data-project="${id}">
+      <header class="project-header">${actionButton('toggle','收起项目','down',`data-project="${id}" aria-expanded="true"`)}${editable('name',project,project.name)}<div class="project-tools">${project.archivedAt ? ui`<button class="plain-button" data-action="restore" data-project="${id}">${icon('undo')} 恢复项目</button>` : actionButton('archive','归档','archive',`data-project="${id}"`)}${actionButton('delete-project','删除项目','trash',`data-project="${id}"`)}</div></header>
       <div class="project-body"><section class="overview ${collapsedOverviews.has(project.id) ? 'overview-folded' : ''}"><div class="overview-header"><h2>${actionButton('toggle-overview',collapsedOverviews.has(project.id) ? '展开总体情况' : '收起总体情况','chevron',`data-project="${id}" aria-expanded="${!collapsedOverviews.has(project.id)}"`)}总体情况</h2><span class="progress-value" aria-label="完成度">${stats.percent}%</span></div>${editable('summary',project,project.summary)}</section>
       ${search.open ? searchHTML(project) : ''}<div class="board" data-board="${id}">${Object.entries(statuses).map(([status,label]) => columnHTML(display,status,label)).join('')}</div></div>
     </section>`;
@@ -266,7 +287,7 @@ export async function mountWorkbench(container, options) {
   }
   function searchHTML(project) {
     const matches = searchMatches(project), index = matches.findIndex(task => task.id === search.taskId);
-    return `<div class="task-search" role="search" aria-label="事项搜索"><input type="text" data-search-query aria-label="搜索事项" placeholder="搜索事项" value="${escape(search.query)}"><select data-search-scope aria-label="搜索范围">${Object.entries({all:'全部',...statuses}).map(([value,label]) => `<option value="${value}" ${search.scope === value ? 'selected' : ''}>${label}</option>`).join('')}</select><span data-search-count role="status" aria-live="polite">${index+1} / ${matches.length}</span>${actionButton('search-prev','上一个匹配事项','up',matches.length ? '' : 'disabled')}${actionButton('search-next','下一个匹配事项','down',matches.length ? '' : 'disabled')}${actionButton('close-search','关闭搜索','close')}</div>`;
+    return ui`<div class="task-search" role="search" aria-label="事项搜索"><input type="text" data-search-query aria-label="搜索事项" placeholder="搜索事项" value="${escape(search.query)}"><select data-search-scope aria-label="搜索范围">${Object.entries({all:'全部',...statuses}).map(([value,label]) => ui`<option value="${value}" ${search.scope === value ? 'selected' : ''}>${t(label)}</option>`).join('')}</select><span data-search-count role="status" aria-live="polite">${index+1} / ${matches.length}</span>${actionButton('search-prev','上一个匹配事项','up',matches.length ? '' : 'disabled')}${actionButton('search-next','下一个匹配事项','down',matches.length ? '' : 'disabled')}${actionButton('close-search','关闭搜索','close')}</div>`;
   }
   function focusSearch(start,end = start) {
     const input = app.querySelector('[data-search-query]');
@@ -305,7 +326,7 @@ export async function mountWorkbench(container, options) {
     const scroll = {top:body?.scrollTop ?? 0,left:body?.scrollLeft ?? 0,strip:app.querySelector('.projects')?.scrollLeft ?? 0,overview:previous?.querySelector('.overview-content')?.scrollTop ?? 0};
     const columnScroll = new Map([...(previous?.querySelectorAll('.column-items') ?? [])].map(element => [element.parentElement.dataset.column,{top:element.scrollTop,left:element.scrollLeft,paddingBottom:element.style.paddingBottom}]));
     const projects = visibleProjects();
-    app.innerHTML = `<div class="shell"><header class="topbar"><strong class="brand">一事</strong><nav aria-label="项目窗口"><button class="nav-item ${view === 'active' ? 'selected' : ''}" data-action="view" data-view="active">项目</button><button class="nav-item ${view === 'archived' ? 'selected' : ''}" data-action="view" data-view="archived">归档</button></nav><div class="topbar-actions"><button class="icon-button save-status" data-save-status data-action="retry"></button>${actionButton('settings','设置','settings')}${actionButton('help','帮助','help')}${actionButton('export','导出备份','download')}${view === 'active' ? actionButton('add-project','新建项目','plus') : ''}</div></header><main class="projects" aria-label="${view === 'active' ? '项目' : '归档'}">${projects.map(projectHTML).join('')}</main></div>`;
+    app.innerHTML = ui`<div class="shell"><header class="topbar"><strong class="brand">一事</strong><nav aria-label="项目窗口"><button class="nav-item ${view === 'active' ? 'selected' : ''}" data-action="view" data-view="active">项目</button><button class="nav-item ${view === 'archived' ? 'selected' : ''}" data-action="view" data-view="archived">归档</button></nav><div class="topbar-actions"><button class="icon-button save-status" data-save-status data-action="retry"></button>${actionButton('settings','设置','settings')}${actionButton('help','帮助','help')}${actionButton('export','导出备份','download')}${view === 'active' ? actionButton('add-project','新建项目','plus') : ''}</div></header><main class="projects ${activeId === null && projects.length ? 'sortable' : ''}" aria-label="${t(view === 'active' ? '项目' : '归档')}">${projects.map(projectHTML).join('')}</main></div>`;
     renderMath(app);saveLabel();
     const current = app.querySelector('.project.expanded');
     if (previous && previous.id === current?.id) {
@@ -370,7 +391,7 @@ export async function mountWorkbench(container, options) {
     editing.element = element;
     const input = document.createElement(editing.type === 'name' ? 'input' : 'textarea');
     input.dataset.inlineEditor = editing.type;
-    input.setAttribute('aria-label',editing.type === 'task' ? '事项正文' : editing.type === 'summary' ? '总体情况正文' : '项目名称');
+    input.setAttribute('aria-label',t(editing.type === 'task' ? '事项正文' : editing.type === 'summary' ? '总体情况正文' : '项目名称'));
     input.maxLength = editing.type === 'name' ? 120 : editing.type === 'summary' ? 100000 : 20000;
     input.value = editing.value;input.spellcheck = false;
     const pane = element.closest('.overview-content,.column-items'), top = pane?.scrollTop;
@@ -444,7 +465,7 @@ export async function mountWorkbench(container, options) {
       const expanded = Boolean(column.querySelector('[data-action="toggle-branch"][aria-expanded="true"]'));
       toggle.disabled = !column.querySelector('[data-action="toggle-branch"]');
       toggle.setAttribute('aria-expanded',expanded);
-      toggle.title = expanded ? '收起本列所有子事项' : '展开本列所有子事项';
+      toggle.title = t(expanded ? '收起本列所有子事项' : '展开本列所有子事项');
       toggle.setAttribute('aria-label',toggle.title);
     }
   }
@@ -506,21 +527,23 @@ export async function mountWorkbench(container, options) {
     beginEditor('task',project,taskId);
   }
 
-  function closeDialog() {dialog.close();dialog.innerHTML = '';}
+  function closeDialog() {dialog.close();dialog.innerHTML = '';dialog.className = '';}
   function rememberedCloseAction() {
     try {const action = storage.getItem('yishi.closeAction');return action === 'hide' || action === 'exit' ? action : null;}
     catch {return null;}
   }
   function showSettings() {
+    dialog.className = 'dialog-settings';
     const closeAction = rememberedCloseAction();
-    dialog.innerHTML = `<header class="dialog-header"><h2>设置</h2>${actionButton('close','关闭','close')}</header><div class="settings-content"><label class="setting-row"><span>颜色配色</span><select data-setting-palette aria-label="颜色配色">${Object.entries(palettes).map(([value,label]) => `<option value="${value}" ${appearance.palette === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="setting-row"><span>界面字体</span><select data-setting-font aria-label="界面字体"><option value="system" ${appearance.font === 'system' ? 'selected' : ''}>系统默认</option><option value="smiley" ${appearance.font === 'smiley' ? 'selected' : ''}>得意黑</option></select></label><label class="setting-row"><span>字号</span><select data-setting-size aria-label="字号">${Array.from({length:13},(_,index) => index+12).map(size => `<option value="${size}" ${appearance.size === size ? 'selected' : ''}>${size}px</option>`).join('')}</select></label>${options.nativeIntegration ? `<div class="setting-row"><span>关闭方式</span><div class="setting-close"><span data-close-preference>${closeAction === 'hide' ? '最小化到托盘' : closeAction === 'exit' ? '退出软件' : '每次询问'}</span><button type="button" class="secondary" data-action="reset-close-choice" ${closeAction ? '' : 'disabled'}>重置关闭选择</button></div></div>` : ''}</div><footer class="dialog-footer"><button class="primary" data-action="close">关闭</button></footer>`;
+    dialog.innerHTML = ui`<header class="dialog-header"><h2>设置</h2>${actionButton('close','关闭','close')}</header><div class="settings-content"><label class="setting-row"><span>语言</span><select data-setting-language aria-label="语言"><option value="zh" ${appearance.language === 'zh' ? 'selected' : ''}>中文</option><option value="en" ${appearance.language === 'en' ? 'selected' : ''}>English</option></select></label><label class="setting-row"><span>颜色配色</span><select data-setting-palette aria-label="颜色配色">${Object.entries(palettes).map(([value,label]) => ui`<option value="${value}" ${appearance.palette === value ? 'selected' : ''}>${t(label)}</option>`).join('')}</select></label><label class="setting-row"><span>界面字体</span><select data-setting-font aria-label="界面字体"><option value="system" ${appearance.font === 'system' ? 'selected' : ''}>系统默认</option><option value="smiley" ${appearance.font === 'smiley' ? 'selected' : ''}>得意黑</option></select></label><label class="setting-row"><span>字号</span><select data-setting-size aria-label="字号">${Array.from({length:13},(_,index) => index+12).map(size => ui`<option value="${size}" ${appearance.size === size ? 'selected' : ''}>${size}px</option>`).join('')}</select></label>${options.nativeIntegration ? ui`<div class="setting-row"><span>关闭方式</span><div class="setting-close"><span data-close-preference>${t(closeAction === 'hide' ? '最小化到托盘' : closeAction === 'exit' ? '退出软件' : '每次询问')}</span><button type="button" class="secondary" data-action="reset-close-choice" ${closeAction ? '' : 'disabled'}>重置关闭选择</button></div></div>` : ''}</div><footer class="dialog-footer"><button class="primary" data-action="close">关闭</button></footer>`;
     dialog.showModal();
   }
   function chooseCloseAction() {
     const remembered = rememberedCloseAction();
     if (remembered) return remembered;
+    dialog.className = '';
     return new Promise(resolve => {
-      dialog.innerHTML = `<header class="dialog-header"><h2>关闭一事</h2></header><div class="close-choices"><label class="remember-close"><input type="checkbox" data-remember-close checked>记住本次选择</label><button type="button" class="primary" data-close-choice="hide">最小化到托盘</button><button type="button" class="secondary" data-close-choice="exit">退出软件</button><button type="button" class="secondary" data-close-choice="cancel">取消</button></div>`;
+      dialog.innerHTML = ui`<header class="dialog-header"><h2>关闭一事</h2></header><div class="close-choices"><label class="remember-close"><input type="checkbox" data-remember-close checked>记住本次选择</label><button type="button" class="primary" data-close-choice="hide">最小化到托盘</button><button type="button" class="secondary" data-close-choice="exit">退出软件</button><button type="button" class="secondary" data-close-choice="cancel">取消</button></div>`;
       const finish = action => {
         if (action === 'hide' || action === 'exit') {
           try {if (dialog.querySelector('[data-remember-close]').checked) storage.setItem('yishi.closeAction',action);else storage.removeItem('yishi.closeAction');}
@@ -536,7 +559,8 @@ export async function mountWorkbench(container, options) {
     });
   }
   function showHelp() {
-    dialog.innerHTML = `<header class="dialog-header"><h2>帮助</h2>${actionButton('close','关闭','close')}</header><div class="help-content">
+    dialog.className = 'dialog-help';
+    dialog.innerHTML = ui`<header class="dialog-header"><h2>帮助</h2>${actionButton('close','关闭','close')}</header><div class="help-content">
       <h3>项目与事项</h3>
       <p>点击项目名、总体情况或事项正文即可编辑。输入自动保存，离开编辑区后渲染。每次只展开一个项目；全部项目折叠后，将鼠标移至项目栏上方，拖动出现的把手调整顺序。</p>
       <p>事项最多三级，状态按「待办项 ↔ 进行中 ↔ 已完成」逐步切换。拖动左侧把手可在同列排序，也可在待办和进行中之间拖到分支图标下，成为子事项。拖动会保留事项状态，并带上全部子事项。项目全部事项完成后可归档，归档和删除均需确认。</p>
@@ -545,7 +569,7 @@ export async function mountWorkbench(container, options) {
       <p>Ctrl+F 打开当前项目的搜索栏。可按列筛选、查看匹配事项数，用上下按钮或 Enter / Shift+Enter 循环跳转；点击 × 或按 Esc 关闭搜索。</p>
       <h3>文本与备份</h3>
       <p>正文支持 Markdown 和公式：行内公式用 <code>$...$</code>，独立公式用 <code>$$...$$</code>。总体情况的分点后，顶格普通行退出列表，缩进续行保留在列表内。</p>
-      <p>顶栏下载按钮导出全部项目。设置中可切换配色、字体并调整字号。${options.nativeIntegration ? '记住关闭方式后，也可在设置中重置关闭选择。' : ''}</p>
+      <p>顶栏下载按钮导出全部项目。设置中可切换配色、字体并调整字号。${options.nativeIntegration ? t('记住关闭方式后，也可在设置中重置关闭选择。') : ''}</p>
       <h3>快捷键</h3><table><tbody>
         <tr><th scope="row"><kbd>Ctrl + B</kbd></th><td>加粗或取消加粗选中文字；无选区时插入加粗标记</td></tr>
         <tr><th scope="row"><kbd>Ctrl + F</kbd></th><td>打开当前项目的事项搜索</td></tr>
@@ -561,7 +585,8 @@ export async function mountWorkbench(container, options) {
     dialog.showModal();
   }
   function confirmAction(title, body, button, operation) {
-    dialog.innerHTML = `<form><header class="dialog-header"><h2>${escape(title)}</h2>${actionButton('close','关闭','close')}</header><p class="dialog-copy">${body}</p><footer class="dialog-footer"><button type="button" class="secondary" data-action="close">取消</button>${button ? `<button type="submit" class="primary">${button}</button>` : ''}</footer></form>`;
+    dialog.className = '';
+    dialog.innerHTML = ui`<form><header class="dialog-header"><h2>${escape(t(title))}</h2>${actionButton('close','关闭','close')}</header><p class="dialog-copy">${body}</p><footer class="dialog-footer"><button type="button" class="secondary" data-action="close">取消</button>${button ? ui`<button type="submit" class="primary">${t(button)}</button>` : ''}</footer></form>`;
     dialog.showModal();dialog.querySelector('form').addEventListener('submit',event => {event.preventDefault();operation();});
   }
   function getSnapshot() {
@@ -601,7 +626,7 @@ export async function mountWorkbench(container, options) {
     }
     const url = URL.createObjectURL(new Blob([JSON.stringify(exported,null,2)],{type:'application/json'}));
     downloadUrls.add(url);
-    const link = document.createElement('a');link.href = url;link.download = `一事-备份-${new Date().toLocaleDateString('sv-SE')}.json`;link.click();setTimeout(() => {URL.revokeObjectURL(url);downloadUrls.delete(url);},1000);
+    const link = document.createElement('a');link.href = url;link.download = `${appearance.language === 'en' ? 'Yishi-backup' : '一事-备份'}-${new Date().toLocaleDateString('sv-SE')}.json`;link.click();setTimeout(() => {URL.revokeObjectURL(url);downloadUrls.delete(url);},1000);
   }
   function revealPendingChildren(project,id) {
     const pending = descendants(project,id).filter(task => task.status === 'todo' && task.title.trim());
@@ -656,7 +681,7 @@ export async function mountWorkbench(container, options) {
     switch (action) {
       case 'close':closeDialog();break;
       case 'reset-close-choice':
-        try {storage.removeItem('yishi.closeAction');element.disabled = true;dialog.querySelector('[data-close-preference]').textContent = '每次询问';toast('下次关闭时将重新询问');}
+        try {storage.removeItem('yishi.closeAction');element.disabled = true;dialog.querySelector('[data-close-preference]').textContent = t('每次询问');toast('下次关闭时将重新询问');}
         catch {toast('无法重置关闭方式，请重试');}break;
       case 'toggle':activeId = activeId === project.id ? null : project.id;render();break;
       case 'view':view = element.dataset.view;activeId = visibleProjects()[0]?.id ?? null;render();break;
@@ -677,7 +702,7 @@ export async function mountWorkbench(container, options) {
       case 'close-search':closeSearch();break;
       case 'add-project':{
         const id = crypto.randomUUID();
-        if (change(() => {state.projects.push({id,name:'新项目',summary:'',archivedAt:null,createdAt:new Date().toISOString(),tasks:[]});view = 'active';activeId = id;})) {
+        if (change(() => {state.projects.push({id,name:t('新项目'),summary:'',archivedAt:null,createdAt:new Date().toISOString(),tasks:[]});view = 'active';activeId = id;})) {
           beginEditor('name',projectById(id));editing.element.querySelector('input').select();
         }break;
       }
@@ -696,19 +721,19 @@ export async function mountWorkbench(container, options) {
       case 'status':change(() => setTaskStatus(project,task.id,element.dataset.status));break;
       case 'archive':{
         const allowed = canArchive(project);
-        confirmAction(allowed ? '归档项目？' : '项目尚未完成',allowed ? `归档「${escape(project.name)}」？` : '请先完成所有事项。',allowed ? '确认归档' : '',() => {
+        confirmAction(allowed ? '归档项目？' : '项目尚未完成',allowed ? t(`归档「${escape(project.name)}」？`,`Archive “${escape(project.name)}”?`) : t('请先完成所有事项。'),allowed ? '确认归档' : '',() => {
           if (change(() => {if (!canArchive(project)) throw new Error('请先完成所有事项');project.archivedAt = new Date().toISOString();activeId = visibleProjects()[0]?.id ?? null;})) closeDialog();
         });break;
       }
       case 'restore':change(() => {project.archivedAt = null;view = 'active';activeId = project.id;});break;
       case 'delete-project':{
-        confirmAction('删除项目？',`删除「${escape(project.name)}」及其 ${project.tasks.length} 个事项？此操作无法撤销。`,'确认删除',() => {
+        confirmAction('删除项目？',t(`删除「${escape(project.name)}」及其 ${project.tasks.length} 个事项？此操作无法撤销。`,`Delete “${escape(project.name)}” and its ${project.tasks.length} tasks? This cannot be undone.`),'确认删除',() => {
           if (change(() => {state.projects = state.projects.filter(item => item.id !== project.id);activeId = visibleProjects()[0]?.id ?? null;})) closeDialog();
         });break;
       }
       case 'delete-task':{
         const count = descendants(project,task.id).length;
-        confirmAction('删除事项？',`删除「${escape(taskName(task))}」${count ? `及其 ${count} 个子事项` : ''}？`,'确认删除',() => {if (change(() => removeTask(project,task.id))) closeDialog();});break;
+        confirmAction('删除事项？',t(`删除「${escape(taskName(task))}」${count ? `及其 ${count} 个子事项` : ''}？`,`Delete “${escape(taskName(task))}”${count ? ` and its ${count} subtasks` : ''}?`),'确认删除',() => {if (change(() => removeTask(project,task.id))) closeDialog();});break;
       }
       case 'help':showHelp();break;
       case 'settings':showSettings();break;
@@ -742,6 +767,7 @@ export async function mountWorkbench(container, options) {
     if (event.target.matches('[data-search-query]')) event.target.dispatchEvent(new Event('input',{bubbles:true}));
   });
   listen(root,'change',event => {
+    if (event.target.matches('[data-setting-language]')) {void setLanguage(event.target.value);return;}
     if (event.target.matches('[data-setting-font],[data-setting-size],[data-setting-palette]')) {
       const value = event.target.value;
       if (event.target.matches('[data-setting-font]')) {if (!Object.hasOwn(fontFamilies,value)) return;appearance.font = value;}
@@ -966,14 +992,18 @@ export async function mountWorkbench(container, options) {
       }
     }
     render();
-    const disposeNative = await options.nativeIntegration?.({toast,persistEditor,isEmptyDraft:() => Boolean(editing?.newTask && editing.value === ''),save,isPending:() => dirty || saving,hasError:() => Boolean(saveError) || conflict,onError:error => toast(error.message),chooseCloseAction});
+    const disposeNative = await options.nativeIntegration?.({toast,getLanguage:() => appearance.language,persistEditor,isEmptyDraft:() => Boolean(editing?.newTask && editing.value === ''),save,isPending:() => dirty || saving,hasError:() => Boolean(saveError) || conflict,onError:error => toast(error.message),chooseCloseAction});
     if (disposeNative) cleanups.push(disposeNative);
+    try {await options.onLanguageChange?.(appearance.language);}
+    catch (error) {toast(error.message || '无法切换界面语言，请重试');options.onError?.(error);}
   } catch (error) {
-    app.innerHTML = `<div class="load-error" role="alert">${escape(error.message)}</div>`;
+    app.innerHTML = ui`<div class="load-error" role="alert">${escape(localizeError(error.message, appearance.language))}</div>`;
     options.onError?.(error);
   }
 
   return {
+    setLanguage,
+    getLanguage: () => appearance.language,
     handleKeydown,
     async flush() {
       if (!state || disposed) return false;

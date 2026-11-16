@@ -6,7 +6,7 @@
 
 已发布到 [Obsidian 插件商店](https://community.obsidian.md/plugins/yishi)，可从页面点击「Add to Obsidian」安装。插件的[独立源码仓库](https://github.com/TalismanH/yishi-obsidian)和[发布文件](https://github.com/TalismanH/yishi-obsidian/releases)只包含插件代码、离线资源与通用测试样例。
 
-插件与原桌面程序共用任务模型和工作台界面，保留三级事项、拖动排序、搜索、归档、Markdown、公式和外观设置。插件仅支持桌面 Obsidian，不需要启动本地服务器。
+插件与原桌面程序共用任务模型和工作台界面，保留三级事项、拖动排序、搜索、归档、Markdown、公式和外观设置。两版均可在设置中选择「中文」或「English」，语言立即生效并记住选择，不翻译或修改用户的项目和事项内容。插件仅支持桌面 Obsidian，不需要启动本地服务器。
 
 ```powershell
 npm ci
@@ -22,13 +22,17 @@ npm run obsidian:build
 每个 Vault 的任务数据独立保存在：
 
 ```text
-一事/workspace.json                 当前工作区，仍为 { state, revision }
-一事/workspace.json.bak             上一个有效版本
-一事/backups/                      导出、导入前和恢复前的独立备份
-一事/recovery-<会话标识>.json        未提交编辑的恢复副本
+Yishi/workspace.json                 当前工作区，仍为 { state, revision }
+Yishi/workspace.json.bak             上一个有效版本
+Yishi/backups/                      导出、导入前和恢复前的独立备份
+Yishi/recovery-<会话标识>.json        未提交编辑的恢复副本
 ```
 
 工作区文件与插件安装目录分开，卸载插件不会删除任务。保存会校验结构和大小，使用独占写锁、临时文件同步落盘及原子替换；每次写入同时核对 revision 和原始文件内容。检测到其他窗口或同步软件修改时拒绝覆盖，保留编辑与恢复副本。执行「重新加载磁盘数据」时，无法保存的当前内容会先导出，再加载磁盘版本。
+
+升级后会在首次加载时把旧 `一事/` 工作区、上一版备份、导出和恢复副本复制到 `Yishi/`，校验通过后才安装主文件。旧目录原样保留；已有 `Yishi/workspace.json` 时优先使用它，不覆盖或合并。源文件被占用、损坏或复制失败时停止迁移，保留来源供手动恢复。新的导出文件使用 `Yishi-backup-` 前缀。
+
+为保留 `fsync`、跨进程独占写锁和覆盖式原子替换，桌面插件继续使用 Node 文件接口，因此商店保留相应的文件系统提示。CSS 已移除审核报告中的不兼容回退、`:has()` 和 `!important` 用法。
 
 输入会立即写入恢复副本；有效编辑保存成功后清理本会话副本。异常退出或插件禁用留下的副本可在设置中手动恢复。无效编辑也会保留原文，导入时仍需通过校验。损坏的工作区不会自动重置，可通过设置显式恢复上一版或导入备份。
 
@@ -64,7 +68,7 @@ node tests/obsidian-ui.mjs
 - **事项搜索**：按当前项目及指定状态查找事项，循环跳转并自动展开目标的祖先分支。
 - **本地保存**：文件级备份、原子写入、版本冲突检查和 JSON 导出；最小化到托盘或退出前等待编辑内容保存。
 
-当前构建目标为 Windows x64，界面为中文。不包含账号、云同步或自动更新。
+当前构建目标为 Windows x64，界面支持中文和 English。不包含账号、云同步或自动更新。
 
 ## 安装与运行
 

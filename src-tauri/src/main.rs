@@ -11,6 +11,19 @@ use tauri::{
     Emitter, Manager,
 };
 
+struct NativeMenu {
+    show: MenuItem<tauri::Wry>,
+    exit: MenuItem<tauri::Wry>,
+}
+
+fn native_labels(language: &str) -> Result<(&'static str, &'static str, &'static str), StoreError> {
+    match language {
+        "zh" => Ok(("一事", "显示主窗口", "退出软件")),
+        "en" => Ok(("Yishi", "Show main window", "Exit")),
+        _ => Err(StoreError::new(400, "Unsupported interface language")),
+    }
+}
+
 fn local_url(url: &tauri::Url) -> bool {
     (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
         || (matches!(url.scheme(), "http" | "https")
@@ -66,6 +79,32 @@ fn hide_to_tray(window: tauri::WebviewWindow) -> Result<(), StoreError> {
         .map_err(|_| StoreError::new(500, "无法隐藏到托盘，请重试"))
 }
 
+#[tauri::command]
+fn set_language(
+    window: tauri::WebviewWindow,
+    menu: tauri::State<'_, NativeMenu>,
+    language: String,
+) -> Result<(), StoreError> {
+    check_window(&window)?;
+    let (title, show, exit) = native_labels(&language)?;
+    let failure = if language == "en" {
+        "Unable to update the window and tray language"
+    } else {
+        "无法更新窗口和托盘语言"
+    };
+    let tray = window
+        .app_handle()
+        .tray_by_id("main-tray")
+        .ok_or_else(|| StoreError::new(500, failure))?;
+    (|| -> tauri::Result<()> {
+        menu.show.set_text(show)?;
+        menu.exit.set_text(exit)?;
+        tray.set_tooltip(Some(title))?;
+        window.set_title(title)
+    })()
+    .map_err(|_| StoreError::new(500, failure))
+}
+
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -105,6 +144,7 @@ fn main() {
             let show = MenuItem::with_id(app, "tray-show", "显示主窗口", true, None::<&str>)?;
             let exit = MenuItem::with_id(app, "tray-exit", "退出软件", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &exit])?;
+            app.manage(NativeMenu { show, exit });
             let icon = app
                 .default_window_icon()
                 .cloned()
@@ -143,7 +183,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             load_workspace,
             save_workspace,
-            hide_to_tray
+            hide_to_tray,
+            set_language
         ])
         .run(tauri::generate_context!())
         .expect("一事桌面窗口启动失败");
@@ -152,6 +193,21 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_language_accepts_only_supported_values() {
+        assert_eq!(
+            native_labels("zh").unwrap(),
+            ("一事", "显示主窗口", "退出软件")
+        );
+        assert_eq!(
+            native_labels("en").unwrap(),
+            ("Yishi", "Show main window", "Exit")
+        );
+        for language in ["", "en-US", "zh-CN", "EN", "fr"] {
+            assert_eq!(native_labels(language).unwrap_err().status, 400);
+        }
+    }
 
     #[test]
     fn only_bundled_origins_can_navigate_or_access_workspace_commands() {

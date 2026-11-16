@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { validateState } from '../public/model.mjs';
@@ -92,19 +92,21 @@ export class WorkspaceStore {
   #baseText;
   #revision = null;
 
-  constructor(directory) {
+  constructor(directory, {legacyDirectory} = {}) {
     this.directory = path.resolve(directory);
+    this.legacyDirectory = legacyDirectory ? path.resolve(legacyDirectory) : null;
     this.filename = path.join(this.directory, 'workspace.json');
     this.backupPath = this.filename + '.bak';
     this.lockPath = path.join(this.directory, 'workspace.lock');
     this.recoveryPath = path.join(this.directory, `recovery-${randomUUID()}.json`);
   }
 
-  #transaction(operation) {
+  #withLock(directory, operation) {
     let descriptor;
+    const lockPath = path.join(directory, 'workspace.lock');
     try {
-      mkdirSync(this.directory, { recursive: true });
-      try { descriptor = openSync(this.lockPath, 'wx', 0o600); }
+      mkdirSync(directory, { recursive: true });
+      try { descriptor = openSync(lockPath, 'wx', 0o600); }
       catch (error) {
         if (error.code === 'EEXIST') throw new StoreError(409, '工作区正在写入或存在遗留锁。请关闭其他一事窗口；确认没有程序使用后移除 workspace.lock 再重试。');
         throw error;
@@ -116,9 +118,58 @@ export class WorkspaceStore {
     finally {
       if (descriptor !== undefined) {
         closeSync(descriptor);
-        unlinkSync(this.lockPath);
+        unlinkSync(lockPath);
       }
     }
+  }
+
+  #transaction(operation) {return this.#withLock(this.directory, operation);}
+
+  #migrateLegacy() {
+    const directory = this.legacyDirectory;
+    if (!directory || directory === this.directory || !existsSync(path.join(directory, 'workspace.json'))) return;
+    this.#withLock(directory, () => {
+      if (lstatSync(directory).isSymbolicLink() || lstatSync(path.join(directory,'workspace.json')).isSymbolicLink()) throw new StoreError(400, '旧工作区含非普通数据文件，迁移已停止。');
+      if (lstatSync(directory).isSymbolicLink() || lstatSync(path.join(directory,'workspace.json')).isSymbolicLink()) throw new StoreError(400, '旧工作区含非普通数据文件，迁移已停止。');
+      const original = readText(path.join(directory, 'workspace.json'));
+      try {parseSnapshot(original);}
+      catch (cause) {throw new StoreError(500, '旧工作区无法读取，原目录已保留，请选择有效备份导入。', {cause});}
+      const copies = [];
+      function collect(relative) {
+        const filename = path.join(directory, relative);
+        const stat = lstatSync(filename);
+        if (stat.isSymbolicLink() || !stat.isFile()) throw new StoreError(400, '旧工作区含非普通数据文件，迁移已停止。');
+        copies.push({relative, text:readText(filename), atime:stat.atime, mtime:stat.mtime});
+      }
+      if (existsSync(path.join(directory, 'workspace.json.bak'))) collect('workspace.json.bak');
+      for (const name of readdirSync(directory)) if (/^recovery-[\da-f-]+\.json$/.test(name)) collect(name);
+      const backups = path.join(directory, 'backups');
+      if (existsSync(backups)) {
+        if (lstatSync(backups).isSymbolicLink() || !lstatSync(backups).isDirectory()) throw new StoreError(400, '旧备份目录无法安全读取，原文件已保留。');
+        for (const name of readdirSync(backups)) if (name.endsWith('.json')) collect(path.join('backups',name));
+      }
+      for (const copy of copies) {
+        let target = path.join(this.directory, copy.relative);
+        mkdirSync(path.dirname(target), {recursive:true});
+        if (existsSync(target)) {
+          if (readText(target) === copy.text) continue;
+          // Preserve unrelated/pre-existing destination files as well as the old copy.
+          target = copy.relative.startsWith('recovery-')
+            ? path.join(this.directory, `recovery-${randomUUID()}.json`)
+            : path.join(this.directory, 'backups', `legacy-${randomUUID()}.json`);
+          mkdirSync(path.dirname(target), {recursive:true});
+        }
+        writeNew(target,copy.text);
+        if (readText(target) !== copy.text) throw new StoreError(500, '迁移副本校验失败，原目录已保留。');
+        utimesSync(target,copy.atime,copy.mtime);
+      }
+      this.#archive(original,'migration-source');
+      if (existsSync(this.filename) || readText(path.join(directory,'workspace.json')) !== original) {
+        throw new StoreError(409, '迁移期间数据发生变化，已保留两处文件，请重新打开工作台。');
+      }
+      atomicWrite(this.filename,original);
+      if (readText(this.filename) !== original) throw new StoreError(500, '迁移副本校验失败，原目录已保留。');
+    });
   }
 
   async load() {
@@ -133,8 +184,16 @@ export class WorkspaceStore {
           this.#observed = true;
           throw new StoreError(500, '工作区文件缺失，已有数据未被重置；请导入备份或恢复上一版本。');
         }
-        text = encode({ state: { version: 1, projects: [] }, revision: 0 });
-        atomicWrite(this.filename, text);
+        try {this.#migrateLegacy();}
+        catch (error) {
+          if (!existsSync(this.filename)) {this.#observed = true;this.#baseText = null;this.#revision = null;}
+          throw error;
+        }
+        if (existsSync(this.filename)) text = readText(this.filename);
+        else {
+          text = encode({ state: { version: 1, projects: [] }, revision: 0 });
+          atomicWrite(this.filename, text);
+        }
       }
       this.#baseText = text;
       this.#revision = null;
@@ -204,7 +263,7 @@ export class WorkspaceStore {
   async importState(text, expectedRevision) {
     const state = parseImport(text);
     if (expectedRevision !== null) checkRevision(expectedRevision);
-    return this.#transaction(() => this.#replace(state, expectedRevision, '导入前备份'));
+    return this.#transaction(() => this.#replace(state, expectedRevision, 'before-import'));
   }
 
   async restoreBackup(expectedRevision) {
@@ -213,13 +272,13 @@ export class WorkspaceStore {
       let state;
       try { state = parseSnapshot(readText(this.backupPath)).state; }
       catch (cause) { throw new StoreError(500, '上一版本备份无法读取，未修改现有文件。', { cause }); }
-      return this.#replace(state, expectedRevision, '恢复前备份');
+      return this.#replace(state, expectedRevision, 'before-restore');
     });
   }
 
   async exportState(state) {
     const text = encode(state, READ_LIMIT);
-    try { return this.#archive(text, '一事-备份'); }
+    try { return this.#archive(text, 'Yishi-backup'); }
     catch (error) { throw storageError(error); }
   }
 

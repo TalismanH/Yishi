@@ -1,12 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, rm, readdir, mkdir, truncate } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, readdir, mkdir, truncate, stat, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createInitialState } from '../public/model.mjs';
 import { WorkspaceStore, parseImport } from '../obsidian/store.mjs';
+
+async function migrationSetup(t) {
+  const root = await mkdtemp(path.join(tmpdir(),'yishi-folder-migration-'));
+  t.after(() => rm(root,{recursive:true,force:true}));
+  const legacy = path.join(root,'一事'), target = path.join(root,'Yishi');
+  const old = new WorkspaceStore(legacy);
+  await old.load();
+  await old.save({state:createInitialState(),revision:0});
+  return {root,legacy,target,old};
+}
 
 async function setup(t) {
   const directory = await mkdtemp(path.join(tmpdir(), 'yishi-obsidian-'));
@@ -17,6 +27,80 @@ async function setup(t) {
 
 const readJSON = async filename => JSON.parse(await readFile(filename, 'utf8'));
 const rejectsStatus = (promise, status) => assert.rejects(promise, error => error.status === status);
+
+test('migrates the complete old folder without changing source data or revision', async t => {
+  const {legacy,target,old} = await migrationSetup(t);
+  const current = await old.load();
+  const exported = await old.exportState(current.state);
+  const recovery = structuredClone(current);
+  recovery.state.projects[0].name='';
+  old.writeRecovery(recovery);
+  await utimes(old.recoveryPath,new Date('2025-01-02T03:04:05Z'),new Date('2025-01-02T03:04:05Z'));
+  const source = await readFile(old.filename,'utf8');
+  const store = new WorkspaceStore(target,{legacyDirectory:legacy});
+  assert.deepEqual(await store.load(),current);
+  assert.equal(await readFile(store.filename,'utf8'),source);
+  assert.deepEqual(await readJSON(store.backupPath),await readJSON(old.backupPath));
+  assert.equal(await readFile(path.join(target,'backups',path.basename(exported)),'utf8'),await readFile(exported,'utf8'));
+  assert.deepEqual(await readJSON(path.join(target,path.basename(old.recoveryPath))),recovery);
+  assert.ok(Math.abs((await stat(path.join(target,path.basename(old.recoveryPath)))).mtimeMs-(await stat(old.recoveryPath)).mtimeMs)<1);
+  assert.equal(await readFile(old.filename,'utf8'),source);
+  assert.ok((await readdir(path.join(target,'backups'))).some(name=>name.startsWith('migration-source-')));
+  current.state.projects[0].name='New folder edit';
+  await store.save(current);
+  assert.equal((await new WorkspaceStore(target,{legacyDirectory:legacy}).load()).state.projects[0].name,'New folder edit');
+  assert.equal(await readFile(old.filename,'utf8'),source);
+  assert.match(path.basename(await store.exportState(current.state)),/^Yishi-backup-/);
+});
+
+test('an existing Yishi workspace always wins over legacy data', async t => {
+  const {legacy,target} = await migrationSetup(t);
+  const store = new WorkspaceStore(target);
+  const empty=await store.load();
+  assert.deepEqual(await new WorkspaceStore(target,{legacyDirectory:legacy}).load(),empty);
+  assert.equal((await readdir(target)).includes('backups'),false);
+});
+
+test('busy or corrupt legacy data never creates a replacement workspace', async t => {
+  const {legacy,target,old} = await migrationSetup(t);
+  const original=await readFile(old.filename,'utf8');
+  await writeFile(old.lockPath,'busy');
+  await rejectsStatus(new WorkspaceStore(target,{legacyDirectory:legacy}).load(),409);
+  await assert.rejects(readFile(path.join(target,'workspace.json')), {code:'ENOENT'});
+  assert.equal(await readFile(old.filename,'utf8'),original);
+  await rm(old.lockPath);
+  await writeFile(old.filename,'{broken');
+  const store=new WorkspaceStore(target,{legacyDirectory:legacy});
+  await rejectsStatus(store.load(),500);
+  await assert.rejects(readFile(store.filename), {code:'ENOENT'});
+  await store.importState(JSON.stringify(createInitialState()),null);
+  assert.equal(await readFile(old.filename,'utf8'),'{broken');
+});
+
+test('a missing target with a backup cannot silently fall back to stale legacy data', async t => {
+  const {legacy,target,old} = await migrationSetup(t);
+  await mkdir(target);
+  const backup=JSON.stringify({state:{version:1,projects:[]},revision:40});
+  await writeFile(path.join(target,'workspace.json.bak'),backup);
+  const store=new WorkspaceStore(target,{legacyDirectory:legacy});
+  await rejectsStatus(store.load(),500);
+  await assert.rejects(readFile(store.filename), {code:'ENOENT'});
+  assert.equal(await readFile(store.backupPath,'utf8'),backup);
+  assert.equal((await old.load()).revision,1);
+});
+
+test('migration copy failure preserves both the source and pre-existing target files', async t => {
+  const {legacy,target,old} = await migrationSetup(t);
+  const current=await old.load();
+  await old.exportState(current.state);
+  await mkdir(target);
+  await writeFile(path.join(target,'backups'),'occupied');
+  const store=new WorkspaceStore(target,{legacyDirectory:legacy});
+  await rejectsStatus(store.load(),500);
+  await assert.rejects(readFile(store.filename), {code:'ENOENT'});
+  assert.deepEqual(await old.load(),current);
+  assert.equal(await readFile(path.join(target,'backups'),'utf8'),'occupied');
+});
 
 test('plugin initializes empty JSON, preserves previous version, and reloads saved data', async t => {
   const { directory, store, snapshot } = await setup(t);
