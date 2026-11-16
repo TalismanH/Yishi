@@ -7,19 +7,23 @@ import {fileURLToPath} from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'dist', 'yishi');
 await mkdir(output, {recursive: true});
+const notices = ['public/vendor/MARKED-LICENSE.md', 'public/vendor/KATEX-LICENSE', 'public/vendor/fonts/OFL.txt', 'public/vendor/smiley-sans/LICENSE'];
+const thirdPartyLicenses = notices.map(filename => filename + '\n\n' + readFileSync(path.join(root, filename), 'utf8')).join('\n\n');
+const licenseHeader = '/*!\nYishi — Apache-2.0\n\n' + readFileSync(path.join(root, 'LICENSE'), 'utf8') + '\n\n' + thirdPartyLicenses + '\n*/\n';
 
 await build({
   absWorkingDir: root,
   entryPoints: ['obsidian/main.mjs'],
   outfile: path.join(output, 'main.js'),
   bundle: true, format: 'cjs', platform: 'node', target: 'es2021',
+  banner: {js: licenseHeader},
   external: ['obsidian', 'electron'],
   plugins: [{
     name: 'vendored-commonjs',
     setup(builder) {
-      builder.onResolve({filter: /public\/vendor\/.*\.js$/}, args => ({path: path.resolve(args.resolveDir, args.path) + '.cjs', namespace: 'vendor'}));
-      builder.onResolve({filter: /^katex$/, namespace: 'vendor'}, () => ({path: path.join(root, 'public/vendor/katex.min.js.cjs'), namespace: 'vendor'}));
-      builder.onLoad({filter: /\.cjs$/, namespace: 'vendor'}, args => ({contents: readFileSync(args.path.slice(0, -4), 'utf8'), loader: 'js'}));
+      builder.onResolve({filter: /public\/vendor\/.*\.js$/}, args => ({path: path.relative(root, path.resolve(args.resolveDir, args.path)).split(path.sep).join('/') + '.cjs', namespace: 'vendor'}));
+      builder.onResolve({filter: /^katex$/, namespace: 'vendor'}, () => ({path: 'public/vendor/katex.min.js.cjs', namespace: 'vendor'}));
+      builder.onLoad({filter: /\.cjs$/, namespace: 'vendor'}, args => ({contents: readFileSync(path.join(root, args.path.slice(0, -4)), 'utf8'), loader: 'js'}));
     },
   }],
 });
@@ -45,9 +49,8 @@ css = css.replace(/@font-face\s*\{[^}]*\}/g, rule => {fonts.push(rule); return '
 const styles = [...fonts, ...animations].join('\n') + '\n.yishi-workbench {\n' + css + '\n}\n'
   + readFileSync(path.join(root, 'obsidian/styles.css'), 'utf8');
 const compiled = await transform(styles, {loader: 'css', target: 'chrome100', minify: true});
-await writeFile(path.join(output, 'styles.css'), compiled.code);
+await writeFile(path.join(output, 'styles.css'), licenseHeader + compiled.code);
 await copyFile(path.join(root, 'obsidian/manifest.json'), path.join(output, 'manifest.json'));
 await copyFile(path.join(root, 'LICENSE'), path.join(output, 'LICENSE'));
-const notices = ['public/vendor/MARKED-LICENSE.md', 'public/vendor/KATEX-LICENSE', 'public/vendor/fonts/OFL.txt', 'public/vendor/smiley-sans/LICENSE'];
-await writeFile(path.join(output, 'THIRD-PARTY-LICENSES.txt'), notices.map(filename => filename + '\n\n' + readFileSync(path.join(root, filename), 'utf8')).join('\n\n'));
+await writeFile(path.join(output, 'THIRD-PARTY-LICENSES.txt'), thirdPartyLicenses);
 console.log(`Obsidian plugin built: ${output}`);

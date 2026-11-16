@@ -4,6 +4,8 @@
 
 ## Obsidian 桌面插件
 
+已发布到 [Obsidian 插件商店](https://community.obsidian.md/plugins/yishi)，可从页面点击「Add to Obsidian」安装。插件的[独立源码仓库](https://github.com/TalismanH/yishi-obsidian)和[发布文件](https://github.com/TalismanH/yishi-obsidian/releases)只包含插件代码、离线资源与通用测试样例。
+
 插件与原桌面程序共用任务模型和工作台界面，保留三级事项、拖动排序、搜索、归档、Markdown、公式和外观设置。插件仅支持桌面 Obsidian，不需要启动本地服务器。
 
 ```powershell
