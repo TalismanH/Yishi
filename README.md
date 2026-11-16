@@ -2,6 +2,52 @@
 
 面向 Windows 的本地待办工作台，用「待办项 → 进行中 → 已完成」三列整理项目和三级事项。基于 Tauri 2，数据由 Rust 直接保存到本机，无需账号或后台服务，Markdown 与 LaTeX 资源随程序离线分发。
 
+## Obsidian 桌面插件
+
+插件与原桌面程序共用任务模型和工作台界面，保留三级事项、拖动排序、搜索、归档、Markdown、公式和外观设置。插件仅支持桌面 Obsidian，不需要启动本地服务器。
+
+```powershell
+npm ci
+npm run obsidian:build
+```
+
+构建产物位于 `dist/yishi/`。将该目录复制到目标 Vault 的 `.obsidian/plugins/yishi/`，在第三方插件设置中启用 **Yishi**。点击左侧一事图标，或执行命令 **Yishi: 打开工作台**。
+
+在 **设置 → Yishi** 中导入 JSON、导出备份、恢复上一版或查看未保存内容。工作台标签页右上角也提供导入、重新加载和恢复入口。导入兼容旧桌面版的 `workspace.json`（`{ state, revision }`）及下载按钮导出的纯 `state`；确认后替换当前工作台，导入前另存备份，不修改来源文件。外观设置未包含在旧版 JSON 中，需要在插件内重新设置。
+
+迁移正在使用的 exe 数据时，先在该 exe 中点击「导出备份」，再导入这份新文件；不要仅凭某个历史 `workspace.json` 的路径或 revision 判断它是当前数据。插件与 exe 各自保存，导入不会建立两者之间的自动同步。
+
+每个 Vault 的任务数据独立保存在：
+
+```text
+一事/workspace.json                 当前工作区，仍为 { state, revision }
+一事/workspace.json.bak             上一个有效版本
+一事/backups/                      导出、导入前和恢复前的独立备份
+一事/recovery-<会话标识>.json        未提交编辑的恢复副本
+```
+
+工作区文件与插件安装目录分开，卸载插件不会删除任务。保存会校验结构和大小，使用独占写锁、临时文件同步落盘及原子替换；每次写入同时核对 revision 和原始文件内容。检测到其他窗口或同步软件修改时拒绝覆盖，保留编辑与恢复副本。执行「重新加载磁盘数据」时，无法保存的当前内容会先导出，再加载磁盘版本。
+
+输入会立即写入恢复副本；有效编辑保存成功后清理本会话副本。异常退出或插件禁用留下的副本可在设置中手动恢复。无效编辑也会保留原文，导入时仍需通过校验。损坏的工作区不会自动重置，可通过设置显式恢复上一版或导入备份。
+
+JSON 是否跨设备同步取决于 Vault 的同步工具配置；插件检测冲突，不自动合并多设备修改。外部同步工具不遵守本插件的写锁，不能提供分布式事务保障。如果异常退出留下 `workspace.lock`，先关闭使用该 Vault 的所有 Obsidian 实例，再移除这一锁文件；不要删除工作区或备份。
+
+插件验证：
+
+```powershell
+npm test
+npm run check
+npm run obsidian:build
+# 使用已有 Playwright；OBSIDIAN_EXE 指向桌面 Obsidian.exe
+$env:PLAYWRIGHT_MODULE = 'C:\path\to\playwright\index.mjs'
+node tests/workbench-ui.mjs
+$env:OBSIDIAN_EXE = 'C:\path\to\Obsidian.exe'
+# 若验证自动更新版，可指定现有 obsidian-<版本>.asar 文件：$env:OBSIDIAN_ASAR = 'C:\path\to\obsidian-1.15.1.asar'
+node tests/obsidian-ui.mjs
+```
+
+实机测试会创建临时 Vault 与独立用户配置，不使用实际笔记库。覆盖插件加载、保存、禁用重启、两种旧格式导入、备份恢复、外部冲突、字体与样式隔离；截图位于 `test-results/obsidian-workbench.png`。
+
 ## 界面预览
 
 ![一事桌面待办界面：项目总览与三列事项看板](preview.png)

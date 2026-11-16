@@ -1,0 +1,9 @@
+{
+  "id": "yishi",
+  "name": "Yishi",
+  "version": "1.0.2",
+  "minAppVersion": "1.7.2",
+  "description": "一事：支持三级事项、三列看板、Markdown 和本地 JSON 备份的项目工作台。",
+  "author": "Yishi",
+  "isDesktopOnly": true
+}

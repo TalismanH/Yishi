@@ -1,0 +1,28 @@
+.workspace-leaf-content[data-type="yishi-workbench"] > .view-content.yishi-workbench {
+  padding: 0;
+  overflow: hidden;
+  container-type: inline-size;
+  position: relative;
+  height: 100%;
+}
+.yishi-workbench > [data-workbench-app], .yishi-workbench > #app {height: 100%;}
+.yishi-workbench .shell {height: 100%; min-height: 0;}
+.yishi-workbench button {height: auto; box-shadow: none; font-family: inherit; line-height: inherit;}
+.yishi-workbench select {height: auto; color: inherit;}
+.yishi-workbench .icon-button {width: auto;}
+.yishi-workbench .brand {white-space: nowrap; flex-shrink: 0; color: inherit;}
+.yishi-workbench .markdown strong, .yishi-workbench .markdown b {color: #000;}
+.yishi-workbench .project-toggle {justify-content: flex-start;}
+.yishi-workbench svg {overflow: visible;}
+.yishi-workbench [data-inline-editor] {box-shadow: none;}
+.yishi-workbench #toast {position: absolute; max-width: 90%;}
+@container (max-width: 1000px) {
+  .yishi-workbench .task-card {grid-template-columns: minmax(0, 1fr);}
+  .yishi-workbench .task-main {padding-right: 10px;}
+  .yishi-workbench .task-actions {min-height: 22px; padding-bottom: 6px;}
+}
+@container (max-width: 600px) {
+  .yishi-workbench .topbar {height: auto; min-height: 57px; flex-wrap: wrap; gap: 6px 12px; padding: 8px 12px;}
+  .yishi-workbench .topbar nav {height: auto;}
+  .yishi-workbench .topbar-actions {flex-shrink: 0;}
+}

@@ -12,7 +12,8 @@
     "start": "node scripts/tauri.mjs dev --no-dev-server",
     "start:web": "node server.mjs",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check server.mjs && node --check public/model.mjs && node --check public/app.mjs && node --check public/transport.mjs && node --check scripts/tauri.mjs",
+    "check": "node --check server.mjs && node --check public/model.mjs && node --check public/app.mjs && node --check public/workbench.mjs && node --check public/transport.mjs && node --check scripts/tauri.mjs && node --check obsidian/main.mjs && node --check obsidian/store.mjs && node --check scripts/build-obsidian.mjs",
+    "obsidian:build": "node scripts/build-obsidian.mjs",
     "tauri": "node scripts/tauri.mjs",
     "tauri:dev": "node scripts/tauri.mjs dev --no-dev-server",
     "tauri:check": "node scripts/tauri.mjs check",
@@ -20,6 +21,7 @@
     "tauri:build": "node scripts/tauri.mjs build"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.12.4"
+    "@tauri-apps/cli": "^2.12.4",
+    "esbuild": "^0.28.2"
   }
 }

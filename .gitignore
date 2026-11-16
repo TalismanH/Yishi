@@ -1,6 +1,7 @@
 data/
 node_modules/
 test-results/
+dist/
 *.log
 src-tauri/target/
 src-tauri/gen/schemas/
